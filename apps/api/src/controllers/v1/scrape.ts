@@ -54,9 +54,11 @@ export async function scrapeController(
     jobPriority
   );
 
+  const totalWait = (req.body.waitFor ?? 0) + (req.body.actions ?? []).reduce((a,x) => (x.type === "wait" ? x.milliseconds : 0) + a, 0);
+
   let doc: any | undefined;
   try {
-    doc = (await waitForJob(job.id, timeout))[0];
+    doc = (await waitForJob(job.id, timeout + totalWait))[0];
   } catch (e) {
     Logger.error(`Error in scrapeController: ${e}`);
     if (e instanceof Error && e.message.startsWith("Job wait")) {
@@ -64,21 +66,22 @@ export async function scrapeController(
         success: false,
         error: "Request timed out",
       });
-    } else if (typeof e === "string" && e.startsWith("{\"type\":\"all\",")) {
+    } else {
       return res.status(500).json({
         success: false,
-        error: "All scraping methods failed for URL: " + req.body.url,
-        details: JSON.parse(e).errors as string[],
+        error: `(Internal server error) - ${e && e?.message ? e.message : e} ${
+          extractorOptions && extractorOptions.mode !== "markdown"
+            ? " - Could be due to LLM parsing issues"
+            : ""
+        }`,
       });
-    } else {
-      throw e;
     }
   }
 
   await job.remove();
 
   if (!doc) {
-    // console.error("!!! PANIC DOC IS", doc, job);
+    console.error("!!! PANIC DOC IS", doc, job);
     return res.status(200).json({
       success: true,
       warning: "No page found",
@@ -105,7 +108,7 @@ export async function scrapeController(
     creditsToBeBilled = 5;
   }
 
-  billTeam(req.auth.team_id, creditsToBeBilled).catch(error => {
+  billTeam(req.auth.team_id, req.acuc?.sub_id, creditsToBeBilled).catch(error => {
     Logger.error(`Failed to bill team ${req.auth.team_id} for ${creditsToBeBilled} credits: ${error}`);
     // Optionally, you could notify an admin or add to a retry queue here
   });

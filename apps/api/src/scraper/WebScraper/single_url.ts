@@ -6,6 +6,7 @@ import {
   PageOptions,
   FireEngineResponse,
   ExtractorOptions,
+  Action,
 } from "../../lib/entities";
 import { parseMarkdown } from "../../lib/html-to-markdown";
 import { urlSpecificParams } from "./utils/custom/website_params";
@@ -28,8 +29,8 @@ const useFireEngine = process.env.FIRE_ENGINE_BETA_URL !== '' && process.env.FIR
 
 export const baseScrapers = [
   useFireEngine ? "fire-engine;chrome-cdp" : undefined,
-  useScrapingBee ? "scrapingBee" : undefined,
   useFireEngine ? "fire-engine" : undefined,
+  useScrapingBee ? "scrapingBee" : undefined,
   useFireEngine ? undefined : "playwright",
   useScrapingBee ? "scrapingBeeLoad" : undefined,
   "fetch",
@@ -94,8 +95,8 @@ function getScrapingFallbackOrder(
 
   let defaultOrder = [
     useFireEngine ? "fire-engine;chrome-cdp" : undefined,
-    useScrapingBee ? "scrapingBee" : undefined,
     useFireEngine ? "fire-engine" : undefined,
+    useScrapingBee ? "scrapingBee" : undefined,
     useScrapingBee ? "scrapingBeeLoad" : undefined,
     useFireEngine ? undefined : "playwright",
     "fetch",
@@ -202,6 +203,23 @@ export async function scrapSingleUrl(
         }
 
         if (process.env.FIRE_ENGINE_BETA_URL) {
+          const processedActions: Action[] = pageOptions.actions?.flatMap((action: Action, index: number, array: Action[]) => {
+            if (action.type === "click" || action.type === "write" || action.type === "press") {
+              const result: Action[] = [];
+              // Don't add a wait if the previous action is a wait
+              if (index === 0 || array[index - 1].type !== "wait") {
+                result.push({ type: "wait", milliseconds: 1200 } as Action);
+              }
+              result.push(action);
+              // Don't add a wait if the next action is a wait
+              if (index === array.length - 1 || array[index + 1].type !== "wait") {
+                result.push({ type: "wait", milliseconds: 1200 } as Action);
+              }
+              return result;
+            }
+            return [action as Action];
+          }) ?? [] as Action[];
+          
           const response = await scrapWithFireEngine({
             url,
             ...(engine === "chrome-cdp" ? ({
@@ -214,7 +232,7 @@ export async function scrapSingleUrl(
                   type: "screenshot" as const,
                   fullPage: !!pageOptions.fullPageScreenshot,
                 }] : []),
-                ...(pageOptions.actions ?? []),
+                ...processedActions,
               ],
             }) : ({
               waitFor: pageOptions.waitFor,
@@ -357,9 +375,6 @@ export async function scrapSingleUrl(
     pageStatusCode: 200,
     pageError: undefined,
   };
-
-  const errors: Record<string, string> = {};
-
   try {
     let urlKey = urlToScrap;
     try {
@@ -395,23 +410,21 @@ export async function scrapSingleUrl(
       if (attempt.pageStatusCode) {
         pageStatusCode = attempt.pageStatusCode;
       }
-      if (attempt.pageError && attempt.pageStatusCode >= 400) {
+      if (attempt.pageError && (attempt.pageStatusCode >= 400 || scrapersInOrder.indexOf(scraper) === scrapersInOrder.length - 1)) { // force pageError if it's the last scraper and it failed too
         pageError = attempt.pageError;
+        
+        if (attempt.pageStatusCode < 400 || !attempt.pageStatusCode) {
+          pageStatusCode = 500;
+        }
       } else if (attempt && attempt.pageStatusCode && attempt.pageStatusCode < 400) {
         pageError = undefined;
-      }
-
-      if (attempt.pageError) {
-        errors[scraper] = attempt.pageError;
-      } else {
-        errors[scraper] = null;
       }
 
       if ((text && text.trim().length >= 100) || (typeof screenshot === "string" && screenshot.length > 0)) {
         Logger.debug(`⛏️ ${scraper}: Successfully scraped ${urlToScrap} with text length >= 100 or screenshot, breaking`);
         break;
       }
-      if (pageStatusCode && (pageStatusCode == 404 || pageStatusCode == 500)) {
+      if (pageStatusCode && (pageStatusCode == 404)) {
         Logger.debug(`⛏️ ${scraper}: Successfully scraped ${urlToScrap} with status code 404, breaking`);
         break;
       }
@@ -458,17 +471,12 @@ export async function scrapSingleUrl(
 
     return document;
   } catch (error) {
-    Logger.error(`⛏️ Error: ${error.message} - Failed to fetch URL: ${urlToScrap}`);
+    Logger.debug(`⛏️ Error: ${error.message} - Failed to fetch URL: ${urlToScrap}`);
     ScrapeEvents.insert(jobId, {
       type: "error",
       message: typeof error === "string" ? error : typeof error.message === "string" ? error.message : JSON.stringify(error),
       stack: error.stack,
     });
-
-    if (error instanceof Error && error.message.startsWith("All scraping methods failed")) {
-      throw new Error(JSON.stringify({"type": "all", "errors": Object.values(errors)}));
-    }
-
     return {
       content: "",
       markdown: pageOptions.includeMarkdown || pageOptions.includeExtract ? "" : undefined,
