@@ -26,7 +26,7 @@ export const url = z.preprocess(
     .url()
     .regex(/^https?:\/\//, "URL uses unsupported protocol")
     .refine(
-      (x) => /\.[a-z]{2,}(\/|$)/i.test(x),
+      (x) => /\.[a-z]{2,}([\/?#]|$)/i.test(x),
       "URL must have a valid top-level domain or be a valid path"
     )
     .refine(
@@ -216,6 +216,7 @@ export type Document = {
   actions?: {
     screenshots: string[];
   };
+  warning?: string;
   metadata: {
     title?: string;
     description?: string;
@@ -292,6 +293,17 @@ export type MapResponse =
 export type CrawlStatusParams = {
   jobId: string;
 };
+
+export type ConcurrencyCheckParams = {
+  teamId: string;
+};
+
+export type ConcurrencyCheckResponse =
+  | ErrorResponse
+  | {
+      success: true;
+      concurrency: number;
+    };
 
 export type CrawlStatusResponse =
   | ErrorResponse
@@ -389,6 +401,7 @@ export function legacyCrawlerOptions(x: CrawlerOptions) {
     generateImgAltText: false,
     allowBackwardCrawling: x.allowBackwardLinks,
     allowExternalContentLinks: x.allowExternalLinks,
+    ignoreSitemap: x.ignoreSitemap,
   };
 }
 
@@ -443,12 +456,13 @@ export function legacyDocumentConverter(doc: any): Document {
     extract: doc.llm_extraction,
     screenshot: doc.screenshot ?? doc.fullPageScreenshot,
     actions: doc.actions ?? undefined,
+    warning: doc.warning ?? undefined,
     metadata: {
       ...doc.metadata,
       pageError: undefined,
       pageStatusCode: undefined,
-      error: doc.metadata.pageError,
-      statusCode: doc.metadata.pageStatusCode,
+      error: doc.metadata?.pageError,
+      statusCode: doc.metadata?.pageStatusCode,
     },
   };
 }
