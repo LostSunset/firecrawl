@@ -55,25 +55,32 @@ export async function supaCheckTeamCredits(chunk: AuthCreditUsageChunk, team_id:
 
   const creditsWillBeUsed = chunk.adjusted_credits_used + credits;
 
+  // In case chunk.price_credits is undefined, set it to a large number to avoid mistakes
+  const totalPriceCredits = chunk.price_credits ?? 100000000;
   // Removal of + credits
-  const creditUsagePercentage = creditsWillBeUsed / chunk.price_credits;
+  const creditUsagePercentage = chunk.adjusted_credits_used / totalPriceCredits;
 
   // Compare the adjusted total credits used with the credits allowed by the plan
-  if (creditsWillBeUsed > chunk.price_credits) {
-    sendNotification(
-      team_id,
+  if (creditsWillBeUsed > totalPriceCredits) {
+    // Only notify if their actual credits (not what they will use) used is greater than the total price credits
+    if(chunk.adjusted_credits_used > totalPriceCredits) {
+      sendNotification(
+        team_id,
       NotificationType.LIMIT_REACHED,
       chunk.sub_current_period_start,
-      chunk.sub_current_period_end
+      chunk.sub_current_period_end,
+      chunk
     );
-    return { success: false, message: "Insufficient credits. For more credits, you can upgrade your plan at https://firecrawl.dev/pricing.", remainingCredits: chunk.remaining_credits, chunk };
+  }
+    return { success: false, message: "Insufficient credits to perform this request. For more credits, you can upgrade your plan at https://firecrawl.dev/pricing.", remainingCredits: chunk.remaining_credits, chunk };
   } else if (creditUsagePercentage >= 0.8 && creditUsagePercentage < 1) {
     // Send email notification for approaching credit limit
     sendNotification(
       team_id,
       NotificationType.APPROACHING_LIMIT,
       chunk.sub_current_period_start,
-      chunk.sub_current_period_end
+      chunk.sub_current_period_end,
+      chunk
     );
   }
 
