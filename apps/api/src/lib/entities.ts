@@ -12,7 +12,8 @@ export interface Progress {
 
 export type Action = {
   type: "wait",
-  milliseconds: number,
+  milliseconds?: number,
+  selector?: string,
 } | {
   type: "click",
   selector: string,
@@ -28,7 +29,9 @@ export type Action = {
 } | {
   type: "scroll",
   direction: "up" | "down"
-};
+} | {
+  type: "scrape",
+}
 
 export type PageOptions = {
   includeMarkdown?: boolean;
@@ -55,6 +58,7 @@ export type PageOptions = {
     country?: string;
   };
   skipTlsVerification?: boolean;
+  mobile?: boolean;
 };
 
 export type ExtractorOptions = {
@@ -163,11 +167,17 @@ export class SearchResult {
   }
 }
 
+export interface ScrapeActionContent {
+  url: string;
+  html: string;
+}
+
 export interface FireEngineResponse {
   html: string;
   screenshots?: string[];
   pageStatusCode?: number;
   pageError?: string;
+  scrapeActionContent?: ScrapeActionContent[];
 }
 
 

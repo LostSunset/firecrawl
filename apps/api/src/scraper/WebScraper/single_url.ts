@@ -21,6 +21,7 @@ import { extractLinks } from "./utils/utils";
 import { Logger } from "../../lib/logger";
 import { ScrapeEvents } from "../../lib/scrape-events";
 import { clientSideError } from "../../strings";
+import { ScrapeActionContent } from "../../lib/entities";
 
 dotenv.config();
 
@@ -158,6 +159,7 @@ export async function scrapSingleUrl(
     actions: pageOptions.actions ?? undefined,
     geolocation: pageOptions.geolocation ?? undefined,
     skipTlsVerification: pageOptions.skipTlsVerification ?? false,
+    mobile: pageOptions.mobile ?? false,
   }
 
   if (extractorOptions) {
@@ -180,7 +182,8 @@ export async function scrapSingleUrl(
       text: string;
       screenshot: string;
       actions?: {
-        screenshots: string[];
+        screenshots?: string[];
+        scrapes?: ScrapeActionContent[];
       };
       metadata: { pageStatusCode?: number; pageError?: string | null };
     } = { text: "", screenshot: "", metadata: {} };
@@ -209,14 +212,15 @@ export async function scrapSingleUrl(
             if (action.type === "click" || action.type === "write" || action.type === "press") {
               const result: Action[] = [];
               // Don't add a wait if the previous action is a wait
-              if (index === 0 || array[index - 1].type !== "wait") {
-                result.push({ type: "wait", milliseconds: 1200 } as Action);
-              }
+              // if (index === 0 || array[index - 1].type !== "wait") {
+              //   result.push({ type: "wait", milliseconds: 1200 } as Action);
+              // }
+              // Fire-engine now handles wait times automatically, leaving the code here for now
               result.push(action);
               // Don't add a wait if the next action is a wait
-              if (index === array.length - 1 || array[index + 1].type !== "wait") {
-                result.push({ type: "wait", milliseconds: 1200 } as Action);
-              }
+              // if (index === array.length - 1 || array[index + 1].type !== "wait") {
+              //   result.push({ type: "wait", milliseconds: 1200 } as Action);
+              // }
               return result;
             }
             return [action as Action];
@@ -258,6 +262,7 @@ export async function scrapSingleUrl(
           if (pageOptions.actions) {
             scraperResponse.actions = {
               screenshots: response.screenshots ?? [],
+              scrapes: response.scrapeActionContent ?? [],
             };
           }
           scraperResponse.metadata.pageStatusCode = response.pageStatusCode;

@@ -61,8 +61,14 @@ export type ExtractOptions = z.infer<typeof extractOptions>;
 export const actionsSchema = z.array(z.union([
   z.object({
     type: z.literal("wait"),
-    milliseconds: z.number().int().positive().finite(),
-  }),
+    milliseconds: z.number().int().positive().finite().optional(),
+    selector: z.string().optional(),
+  }).refine(
+    (data) => (data.milliseconds !== undefined || data.selector !== undefined) && !(data.milliseconds !== undefined && data.selector !== undefined),
+    {
+      message: "Either 'milliseconds' or 'selector' must be provided, but not both.",
+    }
+  ),
   z.object({
     type: z.literal("click"),
     selector: z.string(),
@@ -82,6 +88,9 @@ export const actionsSchema = z.array(z.union([
   z.object({
     type: z.literal("scroll"),
     direction: z.enum(["up", "down"]),
+  }),
+  z.object({
+    type: z.literal("scrape"),
   }),
 ]));
 
@@ -107,15 +116,29 @@ export const scrapeOptions = z.object({
   timeout: z.number().int().positive().finite().safe().default(30000),
   waitFor: z.number().int().nonnegative().finite().safe().default(0),
   extract: extractOptions.optional(),
+  mobile: z.boolean().default(false),
   parsePDF: z.boolean().default(true),
   actions: actionsSchema.optional(),
+  // New
+  location: z.object({
+    country: z.string().optional().refine(
+      (val) => !val || Object.keys(countries).includes(val.toUpperCase()),
+      {
+        message: "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
+      }
+    ).transform(val => val ? val.toUpperCase() : 'US'),
+    languages: z.string().array().optional(),
+  }).optional(),
+  
+  // Deprecated
   geolocation: z.object({
     country: z.string().optional().refine(
       (val) => !val || Object.keys(countries).includes(val.toUpperCase()),
       {
         message: "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
       }
-    ).transform(val => val ? val.toUpperCase() : 'US')
+    ).transform(val => val ? val.toUpperCase() : 'US'),
+    languages: z.string().array().optional(),
   }).optional(),
   skipTlsVerification: z.boolean().default(false),
 }).strict(strictMessage)
@@ -445,8 +468,9 @@ export function legacyScrapeOptions(x: ScrapeOptions): PageOptions {
     fullPageScreenshot: x.formats.includes("screenshot@fullPage"),
     parsePDF: x.parsePDF,
     actions: x.actions as Action[], // no strict null checking grrrr - mogery
-    geolocation: x.geolocation,
-    skipTlsVerification: x.skipTlsVerification
+    geolocation: x.location ?? x.geolocation,
+    skipTlsVerification: x.skipTlsVerification,
+    mobile: x.mobile,
   };
 }
 
