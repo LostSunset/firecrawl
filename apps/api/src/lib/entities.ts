@@ -1,3 +1,5 @@
+import type { Document as V1Document } from "../controllers/v1/types";
+
 export interface Progress {
   current: number;
   total: number;
@@ -31,6 +33,9 @@ export type Action = {
   direction: "up" | "down"
 } | {
   type: "scrape",
+} | {
+  type: "executeJavascript",
+  script: string,
 }
 
 export type PageOptions = {
@@ -58,6 +63,7 @@ export type PageOptions = {
     country?: string;
   };
   skipTlsVerification?: boolean;
+  removeBase64Images?: boolean;
   mobile?: boolean;
 };
 
@@ -128,7 +134,8 @@ export class Document {
   provider?: string;
   warning?: string;
   actions?: {
-    screenshots: string[];
+    screenshots?: string[];
+    scrapes?: ScrapeActionContent[];
   }
 
   index?: number;
