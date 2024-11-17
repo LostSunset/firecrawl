@@ -86,7 +86,7 @@ export async function scrapeHelper(
       try {
         doc = (await waitForJob<Document>(jobId, timeout));
       } catch (e) {
-        if (e instanceof Error && e.message.startsWith("Job wait")) {
+        if (e instanceof Error && (e.message.startsWith("Job wait") || e.message === "timeout")) {
           span.setAttribute("timedOut", true);
           return {
             success: false,
@@ -209,7 +209,7 @@ export async function scrapeController(req: Request, res: Response) {
       earlyReturn = true;
       return res.status(500).json({
         error:
-          "Error checking team credits. Please contact hello@firecrawl.com for help.",
+          "Error checking team credits. Please contact help@firecrawl.com for help.",
       });
     }
 

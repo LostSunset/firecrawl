@@ -2,7 +2,7 @@ import { Logger } from "winston";
 import * as Sentry from "@sentry/node";
 
 import { Document, ScrapeOptions } from "../../controllers/v1/types";
-import { logger, ArrayTransport } from "../../lib/logger";
+import { logger } from "../../lib/logger";
 import { buildFallbackList, Engine, EngineScrapeResult, FeatureFlag, scrapeURLWithEngine } from "./engines";
 import { parseMarkdown } from "../../lib/html-to-markdown";
 import { AddFeatureError, EngineError, NoEnginesLeftError, TimeoutError } from "./error";
@@ -95,11 +95,8 @@ function buildMetaObject(id: string, url: string, options: ScrapeOptions, intern
         internalOptions = Object.assign(internalOptions, specParams.internalOptions);
     }
 
-    const _logger = logger.child({ module: "ScrapeURL", scrapeId: id });
+    const _logger = logger.child({ module: "ScrapeURL", scrapeId: id, scrapeURL: url });
     const logs: any[] = [];
-    if (process.env.ENV !== "test") {
-        _logger.add(new ArrayTransport({ array: logs, scrapeId: id }));
-    }
 
     return {
         id, url, options, internalOptions,
@@ -192,7 +189,7 @@ async function scrapeURLLoop(
             // we cannot just rely on text because error messages can be brief and not hit the limit
             // should we just use all the fallbacks and pick the one with the longest text? - mogery
             if (isLongEnough || !isGoodStatusCode) {
-                meta.logger.info("Scrape via " + engine + " deemed successful.", { factors: { isLongEnough, isGoodStatusCode, hasNoPageError }, engineResult });
+                meta.logger.info("Scrape via " + engine + " deemed successful.", { factors: { isLongEnough, isGoodStatusCode, hasNoPageError } });
                 result = {
                     engine,
                     unsupportedFeatures,

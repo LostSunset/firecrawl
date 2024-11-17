@@ -1,10 +1,6 @@
 import { Response } from "express";
 import { v4 as uuidv4 } from "uuid";
-import {
-  mapRequestSchema,
-  RequestWithAuth,
-  scrapeOptions,
-} from "./types";
+import { mapRequestSchema, RequestWithAuth, scrapeOptions } from "./types";
 import { crawlToCrawler, StoredCrawl } from "../../lib/crawl-redis";
 import { MapResponse, MapRequest } from "./types";
 import { configDotenv } from "dotenv";
@@ -46,6 +42,7 @@ export async function mapController(
     originUrl: req.body.url,
     crawlerOptions: {
       ...req.body,
+      limit: req.body.sitemapOnly ? 10000000 : limit,
       scrapeOptions: undefined,
     },
     scrapeOptions: scrapeOptions.parse({}),
@@ -57,104 +54,129 @@ export async function mapController(
 
   const crawler = crawlToCrawler(id, sc);
 
-  let urlWithoutWww = req.body.url.replace("www.", "");
-
-  let mapUrl = req.body.search
-    ? `"${req.body.search}" site:${urlWithoutWww}`
-    : `site:${req.body.url}`;
-
-  const resultsPerPage = 100;
-  const maxPages = Math.ceil(Math.min(MAX_FIRE_ENGINE_RESULTS, limit) / resultsPerPage);
-
-  const cacheKey = `fireEngineMap:${mapUrl}`;
-  const cachedResult = null;
-
-  let allResults: any[] = [];
-  let pagePromises: Promise<any>[] = [];
-
-  if (cachedResult) {
-    allResults = JSON.parse(cachedResult);
-  } else {
-    const fetchPage = async (page: number) => {
-      return fireEngineMap(mapUrl, {
-        numResults: resultsPerPage,
-        page: page,
+  // If sitemapOnly is true, only get links from sitemap
+  if (req.body.sitemapOnly) {
+    const sitemap = await crawler.tryGetSitemap(true, true);
+    if (sitemap !== null) {
+      sitemap.forEach((x) => {
+        links.push(x.url);
       });
-    };
+      links = links.slice(1)
+        .map((x) => {
+          try {
+            return checkAndUpdateURLForMap(x).url.trim();
+          } catch (_) {
+            return null;
+          }
+        })
+        .filter((x) => x !== null) as string[];
+      // links = links.slice(1, limit); // don't slice, unnecessary
+    }
+  } else {
+    let urlWithoutWww = req.body.url.replace("www.", "");
 
-    pagePromises = Array.from({ length: maxPages }, (_, i) => fetchPage(i + 1));
-    allResults = await Promise.all(pagePromises);
+    let mapUrl = req.body.search
+      ? `"${req.body.search}" site:${urlWithoutWww}`
+      : `site:${req.body.url}`;
 
-    await redis.set(cacheKey, JSON.stringify(allResults), "EX", 24 * 60 * 60); // Cache for 24 hours
-  }
+    const resultsPerPage = 100;
+    const maxPages = Math.ceil(
+      Math.min(MAX_FIRE_ENGINE_RESULTS, limit) / resultsPerPage
+    );
 
-  // Parallelize sitemap fetch with serper search
-  const [sitemap, ...searchResults] = await Promise.all([
-    req.body.ignoreSitemap ? null : crawler.tryGetSitemap(),
-    ...(cachedResult ? [] : pagePromises),
-  ]);
+    const cacheKey = `fireEngineMap:${mapUrl}`;
+    const cachedResult = null;
 
-  if (!cachedResult) {
-    allResults = searchResults;
-  }
+    let allResults: any[] = [];
+    let pagePromises: Promise<any>[] = [];
 
-  if (sitemap !== null) {
-    sitemap.forEach((x) => {
-      links.push(x.url);
-    });
-  }
-
-  let mapResults = allResults
-    .flat()
-    .filter((result) => result !== null && result !== undefined);
-
-  const minumumCutoff = Math.min(MAX_MAP_LIMIT, limit);
-  if (mapResults.length > minumumCutoff) {
-    mapResults = mapResults.slice(0, minumumCutoff);
-  }
-
-  if (mapResults.length > 0) {
-    if (req.body.search) {
-      // Ensure all map results are first, maintaining their order
-      links = [
-        mapResults[0].url,
-        ...mapResults.slice(1).map((x) => x.url),
-        ...links,
-      ];
+    if (cachedResult) {
+      allResults = JSON.parse(cachedResult);
     } else {
-      mapResults.map((x) => {
+      const fetchPage = async (page: number) => {
+        return fireEngineMap(mapUrl, {
+          numResults: resultsPerPage,
+          page: page,
+        });
+      };
+
+      pagePromises = Array.from({ length: maxPages }, (_, i) =>
+        fetchPage(i + 1)
+      );
+      allResults = await Promise.all(pagePromises);
+
+      await redis.set(cacheKey, JSON.stringify(allResults), "EX", 24 * 60 * 60); // Cache for 24 hours
+    }
+
+    // Parallelize sitemap fetch with serper search
+    const [sitemap, ...searchResults] = await Promise.all([
+      req.body.ignoreSitemap ? null : crawler.tryGetSitemap(true),
+      ...(cachedResult ? [] : pagePromises),
+    ]);
+
+    if (!cachedResult) {
+      allResults = searchResults;
+    }
+
+    if (sitemap !== null) {
+      sitemap.forEach((x) => {
         links.push(x.url);
       });
     }
-  }
 
-  // Perform cosine similarity between the search query and the list of links
-  if (req.body.search) {
-    const searchQuery = req.body.search.toLowerCase();
+    let mapResults = allResults
+      .flat()
+      .filter((result) => result !== null && result !== undefined);
 
-    links = performCosineSimilarity(links, searchQuery);
-  }
+    const minumumCutoff = Math.min(MAX_MAP_LIMIT, limit);
+    if (mapResults.length > minumumCutoff) {
+      mapResults = mapResults.slice(0, minumumCutoff);
+    }
 
-  links = links
-    .map((x) => {
-      try {
-        return checkAndUpdateURLForMap(x).url.trim();
-      } catch (_) {
-        return null;
+    if (mapResults.length > 0) {
+      if (req.body.search) {
+        // Ensure all map results are first, maintaining their order
+        links = [
+          mapResults[0].url,
+          ...mapResults.slice(1).map((x) => x.url),
+          ...links,
+        ];
+      } else {
+        mapResults.map((x) => {
+          links.push(x.url);
+        });
       }
-    })
-    .filter((x) => x !== null) as string[];
+    }
 
-  // allows for subdomains to be included
-  links = links.filter((x) => isSameDomain(x, req.body.url));
+    // Perform cosine similarity between the search query and the list of links
+    if (req.body.search) {
+      const searchQuery = req.body.search.toLowerCase();
 
-  // if includeSubdomains is false, filter out subdomains
-  if (!req.body.includeSubdomains) {
-    links = links.filter((x) => isSameSubdomain(x, req.body.url));
+      links = performCosineSimilarity(links, searchQuery);
+    }
+
+    links = links
+      .map((x) => {
+        try {
+          return checkAndUpdateURLForMap(x).url.trim();
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter((x) => x !== null) as string[];
+
+    // allows for subdomains to be included
+    links = links.filter((x) => isSameDomain(x, req.body.url));
+
+    // if includeSubdomains is false, filter out subdomains
+    if (!req.body.includeSubdomains) {
+      links = links.filter((x) => isSameSubdomain(x, req.body.url));
+    }
+
+    // remove duplicates that could be due to http/https or www
+    links = removeDuplicateUrls(links);
+    links.slice(0, limit);
   }
-
-  // remove duplicates that could be due to http/https or www
-  links = removeDuplicateUrls(links);
 
   billTeam(req.auth.team_id, req.acuc?.sub_id, 1).catch((error) => {
     logger.error(
@@ -166,14 +188,12 @@ export async function mapController(
   const endTime = new Date().getTime();
   const timeTakenInSeconds = (endTime - startTime) / 1000;
 
-  const linksToReturn = links.slice(0, limit);
-
   logJob({
     job_id: id,
     success: links.length > 0,
     message: "Map completed",
-    num_docs: linksToReturn.length,
-    docs: linksToReturn,
+    num_docs: links.length,
+    docs: links,
     time_taken: timeTakenInSeconds,
     team_id: req.auth.team_id,
     mode: "map",
@@ -186,7 +206,7 @@ export async function mapController(
 
   return res.status(200).json({
     success: true,
-    links: linksToReturn,
+    links: links,
     scrape_id: req.body.origin?.includes("website") ? id : undefined,
   });
 }

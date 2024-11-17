@@ -27,6 +27,7 @@ export class WebCrawler {
   constructor({
     jobId,
     initialUrl,
+    baseUrl,
     includes,
     excludes,
     maxCrawledLinks = 10000,
@@ -38,6 +39,7 @@ export class WebCrawler {
   }: {
     jobId: string;
     initialUrl: string;
+    baseUrl?: string;
     includes?: string[];
     excludes?: string[];
     maxCrawledLinks?: number;
@@ -49,7 +51,7 @@ export class WebCrawler {
   }) {
     this.jobId = jobId;
     this.initialUrl = initialUrl;
-    this.baseUrl = new URL(initialUrl).origin;
+    this.baseUrl = baseUrl ?? new URL(initialUrl).origin;
     this.includes = Array.isArray(includes) ? includes : [];
     this.excludes = Array.isArray(excludes) ? excludes : [];
     this.limit = limit;
@@ -63,7 +65,12 @@ export class WebCrawler {
     this.allowExternalContentLinks = allowExternalContentLinks ?? false;
   }
 
-  public filterLinks(sitemapLinks: string[], limit: number, maxDepth: number): string[] {
+  public filterLinks(sitemapLinks: string[], limit: number, maxDepth: number, fromMap: boolean = false): string[] {
+    // If the initial URL is a sitemap.xml, skip filtering
+    if (this.initialUrl.endsWith('sitemap.xml') && fromMap) {
+      return sitemapLinks.slice(0, limit);
+    }
+
     return sitemapLinks
       .filter((link) => {
         let url: URL;
@@ -157,11 +164,14 @@ export class WebCrawler {
     this.robots = robotsParser(this.robotsTxtUrl, txt);
   }
 
-  public async tryGetSitemap(): Promise<{ url: string; html: string; }[] | null> {
+  public async tryGetSitemap(fromMap: boolean = false, onlySitemap: boolean = false): Promise<{ url: string; html: string; }[] | null> {
     logger.debug(`Fetching sitemap links from ${this.initialUrl}`);
     const sitemapLinks = await this.tryFetchSitemapLinks(this.initialUrl);
+    if(fromMap && onlySitemap) {
+      return sitemapLinks.map(link => ({ url: link, html: "" }));
+    }
     if (sitemapLinks.length > 0) {
-      let filteredLinks = this.filterLinks(sitemapLinks, this.limit, this.maxCrawledDepth);
+      let filteredLinks = this.filterLinks(sitemapLinks, this.limit, this.maxCrawledDepth, fromMap);
       return filteredLinks.map(link => ({ url: link, html: "" }));
     }
     return null;
@@ -171,7 +181,7 @@ export class WebCrawler {
     let fullUrl = href;
     if (!href.startsWith("http")) {
       try {
-        fullUrl = new URL(href, this.baseUrl).toString();
+        fullUrl = new URL(href, url).toString();
       } catch (_) {
         return null;
       }
@@ -351,7 +361,8 @@ export class WebCrawler {
       return url;
     };
 
-    const sitemapUrl = url.endsWith("/sitemap.xml")
+
+    const sitemapUrl = url.endsWith(".xml")
       ? url
       : `${url}/sitemap.xml`;
 

@@ -53,7 +53,7 @@ const strictMessage = "Unrecognized key in body -- please review the v1 API docu
 export const extractOptions = z.object({
   mode: z.enum(["llm"]).default("llm"),
   schema: z.any().optional(),
-  systemPrompt: z.string().default("Based on the information on the page, extract all the information from the schema. Try to extract all the fields even those that might not be marked as required."),
+  systemPrompt: z.string().default("Based on the information on the page, extract all the information from the schema in JSON format. Try to extract all the fields even those that might not be marked as required."),
   prompt: z.string().optional()
 }).strict(strictMessage);
 
@@ -88,7 +88,8 @@ export const actionsSchema = z.array(z.union([
   }),
   z.object({
     type: z.literal("scroll"),
-    direction: z.enum(["up", "down"]),
+    direction: z.enum(["up", "down"]).optional().default("down"),
+    selector: z.string().optional(),
   }),
   z.object({
     type: z.literal("scrape"),
@@ -118,7 +119,7 @@ export const scrapeOptions = z.object({
   includeTags: z.string().array().optional(),
   excludeTags: z.string().array().optional(),
   onlyMainContent: z.boolean().default(true),
-  timeout: z.number().int().positive().finite().safe().default(30000),
+  timeout: z.number().int().positive().finite().safe().optional(),
   waitFor: z.number().int().nonnegative().finite().safe().default(0),
   extract: extractOptions.optional(),
   mobile: z.boolean().default(false),
@@ -152,9 +153,10 @@ export const scrapeOptions = z.object({
 
 export type ScrapeOptions = z.infer<typeof scrapeOptions>;
 
-export const scrapeRequestSchema = scrapeOptions.extend({
+export const scrapeRequestSchema = scrapeOptions.omit({ timeout: true }).extend({
   url,
   origin: z.string().optional().default("api"),
+  timeout: z.number().int().positive().finite().safe().default(30000),
 }).strict(strictMessage).refine(
   (obj) => {
     const hasExtractFormat = obj.formats?.includes("extract");
@@ -174,9 +176,21 @@ export const scrapeRequestSchema = scrapeOptions.extend({
 export type ScrapeRequest = z.infer<typeof scrapeRequestSchema>;
 export type ScrapeRequestInput = z.input<typeof scrapeRequestSchema>;
 
+export const webhookSchema = z.preprocess(x => {
+  if (typeof x === "string") {
+    return { url: x };
+  } else {
+    return x;
+  }
+}, z.object({
+  url: z.string().url(),
+  headers: z.record(z.string(), z.string()).default({}),
+}).strict(strictMessage))
+
 export const batchScrapeRequestSchema = scrapeOptions.extend({
   urls: url.array(),
   origin: z.string().optional().default("api"),
+  webhook: webhookSchema.optional(),
 }).strict(strictMessage).refine(
   (obj) => {
     const hasExtractFormat = obj.formats?.includes("extract");
@@ -186,12 +200,7 @@ export const batchScrapeRequestSchema = scrapeOptions.extend({
   {
     message: "When 'extract' format is specified, 'extract' options must be provided, and vice versa",
   }
-).transform((obj) => {
-  if ((obj.formats?.includes("extract") || obj.extract) && !obj.timeout) {
-    return { ...obj, timeout: 60000 };
-  }
-  return obj;
-});
+);
 
 export type BatchScrapeRequest = z.infer<typeof batchScrapeRequestSchema>;
 
@@ -203,6 +212,8 @@ const crawlerOptions = z.object({
   allowBackwardLinks: z.boolean().default(false), // >> TODO: CHANGE THIS NAME???
   allowExternalLinks: z.boolean().default(false),
   ignoreSitemap: z.boolean().default(true),
+  deduplicateSimilarURLs: z.boolean().default(true),
+  ignoreQueryParameters: z.boolean().default(false),
 }).strict(strictMessage);
 
 // export type CrawlerOptions = {
@@ -220,8 +231,8 @@ export type CrawlerOptions = z.infer<typeof crawlerOptions>;
 export const crawlRequestSchema = crawlerOptions.extend({
   url,
   origin: z.string().optional().default("api"),
-  scrapeOptions: scrapeOptions.omit({ timeout: true }).default({}),
-  webhook: z.string().url().optional(),
+  scrapeOptions: scrapeOptions.default({}),
+  webhook: webhookSchema.optional(),
   limit: z.number().default(10000),
 }).strict(strictMessage);
 
@@ -246,6 +257,7 @@ export const mapRequestSchema = crawlerOptions.extend({
   includeSubdomains: z.boolean().default(true),
   search: z.string().optional(),
   ignoreSitemap: z.boolean().default(false),
+  sitemapOnly: z.boolean().default(false),
   limit: z.number().min(1).max(5000).default(5000),
 }).strict(strictMessage);
 
@@ -457,6 +469,8 @@ export function toLegacyCrawlerOptions(x: CrawlerOptions) {
     allowBackwardCrawling: x.allowBackwardLinks,
     allowExternalContentLinks: x.allowExternalLinks,
     ignoreSitemap: x.ignoreSitemap,
+    deduplicateSimilarURLs: x.deduplicateSimilarURLs,
+    ignoreQueryParameters: x.ignoreQueryParameters,
   };
 }
 
@@ -470,7 +484,8 @@ export function fromLegacyCrawlerOptions(x: any): { crawlOptions: CrawlerOptions
       allowBackwardLinks: x.allowBackwardCrawling,
       allowExternalLinks: x.allowExternalContentLinks,
       ignoreSitemap: x.ignoreSitemap,
-      // TODO: returnOnlyUrls support
+      deduplicateSimilarURLs: x.deduplicateSimilarURLs,
+      ignoreQueryParameters: x.ignoreQueryParameters,
     }),
     internalOptions: {
       v0CrawlOnlyUrls: x.returnOnlyUrls,

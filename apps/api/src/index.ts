@@ -80,6 +80,17 @@ function startServer(port = DEFAULT_PORT) {
       `For the Queue UI, open: http://${HOST}:${port}/admin/${process.env.BULL_AUTH_KEY}/queues`
     );
   });
+
+  const exitHandler = () => {
+    logger.info('SIGTERM signal received: closing HTTP server')
+    server.close(() => {
+      logger.info("Server closed.");
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', exitHandler);
+  process.on('SIGINT', exitHandler);
   return server;
 }
 
@@ -196,7 +207,7 @@ app.use((err: unknown, req: Request<{}, ErrorResponse, undefined>, res: Response
   }
 
   logger.error("Error occurred in request! (" + req.path + ") -- ID " + id  + " -- " + verbose);
-  res.status(500).json({ success: false, error: "An unexpected error occurred. Please contact hello@firecrawl.com for help. Your exception ID is " + id });
+  res.status(500).json({ success: false, error: "An unexpected error occurred. Please contact help@firecrawl.com for help. Your exception ID is " + id });
 });
 
 logger.info(`Worker ${process.pid} started`);

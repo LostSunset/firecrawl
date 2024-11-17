@@ -19,6 +19,28 @@ export class LLMRefusalError extends Error {
 }
 
 function normalizeSchema(x: any): any {
+    if (typeof x !== "object" || x === null) return x;
+
+    if (x["$defs"] !== null && typeof x["$defs"] === "object") {
+        x["$defs"] = Object.fromEntries(Object.entries(x["$defs"]).map(([name, schema]) => [name, normalizeSchema(schema)]));
+    }
+
+    if (x && x.anyOf) {
+        x.anyOf = x.anyOf.map(x => normalizeSchema(x));
+    }
+
+    if (x && x.oneOf) {
+        x.oneOf = x.oneOf.map(x => normalizeSchema(x));
+    }
+
+    if (x && x.allOf) {
+        x.allOf = x.allOf.map(x => normalizeSchema(x));
+    }
+
+    if (x && x.not) {
+        x.not = normalizeSchema(x.not);
+    }
+
     if (x && x.type === "object") {
         return {
             ...x,
@@ -122,6 +144,16 @@ async function generateOpenAICompletions(logger: Logger, document: Document, opt
     }
 
     document.extract = jsonCompletion.choices[0].message.parsed;
+
+    if (document.extract === null && jsonCompletion.choices[0].message.content !== null) {
+        try {
+            document.extract = JSON.parse(jsonCompletion.choices[0].message.content);
+        } catch (e) {
+            logger.error("Failed to parse returned JSON, no schema specified.", { error: e });
+            throw new LLMRefusalError("Failed to parse returned JSON. Please specify a schema in the extract object.");
+        }
+    }
+
     if (options.schema && options.schema.type === "array") {
         document.extract = document.extract?.items;
     }

@@ -86,6 +86,8 @@ export interface CrawlScrapeOptions {
     country?: string;
     languages?: string[];
   };
+  skipTlsVerification?: boolean;
+  removeBase64Images?: boolean;
 }
 
 export type Action = {
@@ -106,7 +108,8 @@ export type Action = {
   key: string,
 } | {
   type: "scroll",
-  direction: "up" | "down",
+  direction?: "up" | "down",
+  selector?: string,
 } | {
   type: "scrape",
 } | {
@@ -150,7 +153,12 @@ export interface CrawlParams {
   allowExternalLinks?: boolean;
   ignoreSitemap?: boolean;
   scrapeOptions?: CrawlScrapeOptions;
-  webhook?: string;
+  webhook?: string | {
+    url: string;
+    headers?: Record<string, string>;
+  };
+  deduplicateSimilarURLs?: boolean;
+  ignoreQueryParameters?: boolean;
 }
 
 /**
@@ -213,6 +221,7 @@ export interface MapParams {
   search?: string;
   ignoreSitemap?: boolean;
   includeSubdomains?: boolean;
+  sitemapOnly?: boolean;
   limit?: number;
 }
 
@@ -535,16 +544,18 @@ export default class FirecrawlApp {
    * @param params - Additional parameters for the scrape request.
    * @param pollInterval - Time in seconds for job status checks.
    * @param idempotencyKey - Optional idempotency key for the request.
+   * @param webhook - Optional webhook for the batch scrape.
    * @returns The response from the crawl operation.
    */
   async batchScrapeUrls(
     urls: string[],
     params?: ScrapeParams,
     pollInterval: number = 2,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    webhook?: CrawlParams["webhook"],
   ): Promise<BatchScrapeStatusResponse | ErrorResponse> {
     const headers = this.prepareHeaders(idempotencyKey);
-    let jsonData: any = { urls, ...(params ?? {}) };
+    let jsonData: any = { urls, ...(params ?? {}), webhook };
     try {
       const response: AxiosResponse = await this.postRequest(
         this.apiUrl + `/v1/batch/scrape`,

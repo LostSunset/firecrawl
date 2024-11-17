@@ -23,6 +23,7 @@ import {
   getCrawl,
   getCrawlJobs,
   lockURL,
+  normalizeURL,
 } from "../lib/crawl-redis";
 import { StoredCrawl } from "../lib/crawl-redis";
 import { addScrapeJob } from "./queue-jobs";
@@ -261,7 +262,7 @@ async function processJob(job: Job & { id: string }, token: string) {
       document: null,
       project_id: job.data.project_id,
       error:
-        "URL is blocked. Suspecious activity detected. Please contact hello@firecrawl.com if you believe this is an error.",
+        "URL is blocked. Suspecious activity detected. Please contact help@firecrawl.com if you believe this is an error.",
     };
     return data;
   }
@@ -275,10 +276,18 @@ async function processJob(job: Job & { id: string }, token: string) {
     });
     const start = Date.now();
 
-    const pipeline = await startWebScraperPipeline({
-      job,
-      token,
-    });
+    const pipeline = await Promise.race([
+      startWebScraperPipeline({
+        job,
+        token,
+      }),
+      ...(job.data.scrapeOptions.timeout !== undefined ? [
+        (async () => {
+          await sleep(job.data.scrapeOptions.timeout);
+          throw new Error("timeout")
+        })(),
+      ] : [])
+    ]);
 
     if (!pipeline.success) {
       // TODO: let's Not do this
@@ -318,6 +327,11 @@ async function processJob(job: Job & { id: string }, token: string) {
 
     if (job.data.crawl_id) {
       const sc = (await getCrawl(job.data.crawl_id)) as StoredCrawl;
+    
+      if (doc.metadata.url !== undefined && doc.metadata.sourceURL !== undefined && normalizeURL(doc.metadata.url, sc) !== normalizeURL(doc.metadata.sourceURL, sc)) {
+        logger.debug("Was redirected, locking new URL...");
+        await lockURL(job.data.crawl_id, sc, doc.metadata.url);
+      }
 
       await logJob({
         job_id: job.id as string,
@@ -332,16 +346,16 @@ async function processJob(job: Job & { id: string }, token: string) {
         scrapeOptions: job.data.scrapeOptions,
         origin: job.data.origin,
         crawl_id: job.data.crawl_id,
-      });
+      }, true);
 
       await addCrawlJobDone(job.data.crawl_id, job.id);
 
       if (!job.data.sitemapped && job.data.crawlerOptions !== null) {
         if (!sc.cancelled) {
-          const crawler = crawlToCrawler(job.data.crawl_id, sc);
+          const crawler = crawlToCrawler(job.data.crawl_id, sc, doc.metadata.url ?? doc.metadata.sourceURL ?? sc.originUrl);
 
           const links = crawler.filterLinks(
-            crawler.extractLinksFromHTML(rawHtml ?? "", sc.originUrl as string),
+            crawler.extractLinksFromHTML(rawHtml ?? "", doc.metadata?.url ?? doc.metadata?.sourceURL ?? sc.originUrl as string),
             Infinity,
             sc.crawlerOptions?.maxDepth ?? 10
           );
@@ -472,7 +486,7 @@ async function processJob(job: Job & { id: string }, token: string) {
             url: sc?.originUrl ?? (job.data.crawlerOptions === null ? "Batch Scrape" : "Unknown"),
             crawlerOptions: sc.crawlerOptions,
             origin: job.data.origin,
-          });
+          }, true);
         }
       }
     }
@@ -480,21 +494,27 @@ async function processJob(job: Job & { id: string }, token: string) {
     logger.info(`🐂 Job done ${job.id}`);
     return data;
   } catch (error) {
-    logger.error(`🐂 Job errored ${job.id} - ${error}`);
+    const isEarlyTimeout = error instanceof Error && error.message === "timeout";
 
-    Sentry.captureException(error, {
-      data: {
-        job: job.id,
-      },
-    });
+    if (!isEarlyTimeout) {
+      logger.error(`🐂 Job errored ${job.id} - ${error}`);
 
-    if (error instanceof CustomError) {
-      // Here we handle the error, then save the failed job
-      logger.error(error.message); // or any other error handling
-    }
-    logger.error(error);
-    if (error.stack) {
-      logger.error(error.stack);
+      Sentry.captureException(error, {
+        data: {
+          job: job.id,
+        },
+      });
+
+      if (error instanceof CustomError) {
+        // Here we handle the error, then save the failed job
+        logger.error(error.message); // or any other error handling
+      }
+      logger.error(error);
+      if (error.stack) {
+        logger.error(error.stack);
+      }
+    } else {
+      logger.error(`🐂 Job timed out ${job.id}`);
     }
 
     const data = {
@@ -546,26 +566,26 @@ async function processJob(job: Job & { id: string }, token: string) {
         scrapeOptions: job.data.scrapeOptions,
         origin: job.data.origin,
         crawl_id: job.data.crawl_id,
-      });
+      }, true);
 
-      await logJob({
-        job_id: job.data.crawl_id,
-        success: false,
-        message:
-          typeof error === "string"
-            ? error
-            : error.message ??
-              "Something went wrong... Contact help@mendable.ai",
-        num_docs: 0,
-        docs: [],
-        time_taken: 0,
-        team_id: job.data.team_id,
-        mode: job.data.crawlerOptions !== null ? "crawl" : "batch_scrape",
-        url: sc ? sc.originUrl : job.data.url,
-        crawlerOptions: sc ? sc.crawlerOptions : undefined,
-        scrapeOptions: sc ? sc.scrapeOptions : job.data.scrapeOptions,
-        origin: job.data.origin,
-      });
+      // await logJob({
+      //   job_id: job.data.crawl_id,
+      //   success: false,
+      //   message:
+      //     typeof error === "string"
+      //       ? error
+      //       : error.message ??
+      //         "Something went wrong... Contact help@mendable.ai",
+      //   num_docs: 0,
+      //   docs: [],
+      //   time_taken: 0,
+      //   team_id: job.data.team_id,
+      //   mode: job.data.crawlerOptions !== null ? "crawl" : "batch_scrape",
+      //   url: sc ? sc.originUrl ?? job.data.url : job.data.url,
+      //   crawlerOptions: sc ? sc.crawlerOptions : undefined,
+      //   scrapeOptions: sc ? sc.scrapeOptions : job.data.scrapeOptions,
+      //   origin: job.data.origin,
+      // });
     }
     // done(null, data);
     return data;
