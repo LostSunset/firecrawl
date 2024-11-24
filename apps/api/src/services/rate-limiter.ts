@@ -160,6 +160,7 @@ const testSuiteTokens = [
   "6c46abb",
   "cb0ff78",
   "fd769b2",
+  "4c2638d",
   "cbb3462", // don't remove (s-ai)
   "824abcd" // don't remove (s-ai)
 ];
@@ -204,6 +205,10 @@ export function getRateLimiter(
   }
 
   if(teamId && teamId === process.env.ETIER2A_TEAM_ID) {
+    return etier2aRateLimiter;
+  }
+
+  if(teamId && teamId === process.env.ETIER2D_TEAM_ID) {
     return etier2aRateLimiter;
   }
 
