@@ -151,7 +151,24 @@ export const scrapeOptions = z.object({
 }).strict(strictMessage)
 
 
+
 export type ScrapeOptions = z.infer<typeof scrapeOptions>;
+
+export const extractV1Options = z.object({
+  urls: url.array(),
+  prompt: z.string().optional(),
+  schema: z.any().optional(),
+  limit: z.number().int().positive().finite().safe().optional(),
+  ignoreSitemap: z.boolean().default(false),
+  includeSubdomains: z.boolean().default(true),
+  allowExternalLinks: z.boolean().default(false),
+  origin: z.string().optional().default("api"),
+  timeout: z.number().int().positive().finite().safe().default(60000)
+}).strict(strictMessage)
+
+export type ExtractV1Options = z.infer<typeof extractV1Options>;
+export const extractRequestSchema = extractV1Options;
+export type ExtractRequest = z.infer<typeof extractRequestSchema>;
 
 export const scrapeRequestSchema = scrapeOptions.omit({ timeout: true }).extend({
   url,
@@ -172,6 +189,8 @@ export const scrapeRequestSchema = scrapeOptions.omit({ timeout: true }).extend(
   }
   return obj;
 });
+
+
 
 export type ScrapeRequest = z.infer<typeof scrapeRequestSchema>;
 export type ScrapeRequestInput = z.input<typeof scrapeRequestSchema>;
@@ -212,6 +231,7 @@ const crawlerOptions = z.object({
   allowBackwardLinks: z.boolean().default(false), // >> TODO: CHANGE THIS NAME???
   allowExternalLinks: z.boolean().default(false),
   allowSubdomains: z.boolean().default(false),
+  ignoreRobotsTxt: z.boolean().default(false),
   ignoreSitemap: z.boolean().default(true),
   deduplicateSimilarURLs: z.boolean().default(true),
   ignoreQueryParameters: z.boolean().default(false),
@@ -337,6 +357,21 @@ export type ScrapeResponse =
 export interface ScrapeResponseRequestTest {
   statusCode: number;
   body: ScrapeResponse;
+  error?: string;
+}
+
+export type ExtractResponse =
+  | ErrorResponse
+  | {
+      success: true;
+      warning?: string;
+      data: z.infer<typeof extractRequestSchema>;
+      scrape_id?: string;
+    };
+
+export interface ExtractResponseRequestTest {
+  statusCode: number;
+  body: ExtractResponse;
   error?: string;
 }
 
@@ -470,6 +505,7 @@ export function toLegacyCrawlerOptions(x: CrawlerOptions) {
     allowBackwardCrawling: x.allowBackwardLinks,
     allowExternalContentLinks: x.allowExternalLinks,
     allowSubdomains: x.allowSubdomains,
+    ignoreRobotsTxt: x.ignoreRobotsTxt,
     ignoreSitemap: x.ignoreSitemap,
     deduplicateSimilarURLs: x.deduplicateSimilarURLs,
     ignoreQueryParameters: x.ignoreQueryParameters,
@@ -486,6 +522,7 @@ export function fromLegacyCrawlerOptions(x: any): { crawlOptions: CrawlerOptions
       allowBackwardLinks: x.allowBackwardCrawling,
       allowExternalLinks: x.allowExternalContentLinks,
       allowSubdomains: x.allowSubdomains,
+      ignoreRobotsTxt: x.ignoreRobotsTxt,
       ignoreSitemap: x.ignoreSitemap,
       deduplicateSimilarURLs: x.deduplicateSimilarURLs,
       ignoreQueryParameters: x.ignoreQueryParameters,
@@ -496,6 +533,13 @@ export function fromLegacyCrawlerOptions(x: any): { crawlOptions: CrawlerOptions
   };
 }
 
+
+
+export interface MapDocument {
+  url: string;
+  title?: string;
+  description?: string;
+}   
 export function fromLegacyScrapeOptions(pageOptions: PageOptions, extractorOptions: ExtractorOptions | undefined, timeout: number | undefined): { scrapeOptions: ScrapeOptions, internalOptions: InternalOptions } {
   return {
     scrapeOptions: scrapeOptions.parse({
