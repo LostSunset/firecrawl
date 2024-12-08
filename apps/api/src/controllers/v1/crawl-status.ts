@@ -5,6 +5,7 @@ import { getScrapeQueue } from "../../services/queue-service";
 import { supabaseGetJobById, supabaseGetJobsById } from "../../lib/supabase-jobs";
 import { configDotenv } from "dotenv";
 import { Job, JobState } from "bullmq";
+import { logger } from "../../lib/logger";
 configDotenv();
 
 export async function getJob(id: string) {
@@ -98,8 +99,18 @@ export async function crawlStatusController(req: RequestWithAuth<CrawlStatusPara
       // both loops will break once we cross the byte counter
       for (let ii = 0; ii < jobs.length && bytes < bytesLimit; ii++) {
         const job = jobs[ii];
+        const state = await job.getState();
+
+        if (state === "failed" || state === "active") { // TODO: why is active here? race condition? shouldn't matter tho - MG
+          continue;
+        }
+
+        if (job.returnvalue === undefined) {
+          logger.warn("Job was considered done, but returnvalue is undefined!", { jobId: job.id, state });
+          continue;
+        }
         doneJobs.push(job);
-        bytes += JSON.stringify(job.returnvalue).length;
+        bytes += JSON.stringify(job.returnvalue ?? null).length;
       }
     }
 
@@ -108,7 +119,7 @@ export async function crawlStatusController(req: RequestWithAuth<CrawlStatusPara
       doneJobs.splice(doneJobs.length - 1, 1);
     }
   } else {
-    doneJobs = await getJobs(doneJobsOrder);
+    doneJobs = (await Promise.all((await getJobs(doneJobsOrder)).map(async x => (await x.getState()) === "failed" ? null : x))).filter(x => x !== null) as Job[];
   }
 
   const data = doneJobs.map(x => x.returnvalue);

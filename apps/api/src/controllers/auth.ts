@@ -95,7 +95,8 @@ export async function getACUC(
     while (retries < maxRetries) {
       ({ data, error } = await supabase_service.rpc(
         "auth_credit_usage_chunk_test_21_credit_pack",
-        { input_key: api_key }
+        { input_key: api_key },
+        { get: true }
       ));
 
       if (!error) {
@@ -269,7 +270,7 @@ export async function supaAuthenticateUser(
   try {
     await rateLimiter.consume(team_endpoint_token);
   } catch (rateLimiterRes) {
-    logger.error(`Rate limit exceeded: ${rateLimiterRes}`);
+    logger.error(`Rate limit exceeded: ${rateLimiterRes}`, { teamId });
     const secs = Math.round(rateLimiterRes.msBeforeNext / 1000) || 1;
     const retryDate = new Date(Date.now() + rateLimiterRes.msBeforeNext);
 
@@ -340,6 +341,8 @@ function getPlanByPriceId(price_id: string | null): PlanType {
       return "etier2c";
     case process.env.STRIPE_PRICE_ID_ETIER1A_MONTHLY: //ocqh
       return "etier1a";
+    case process.env.STRIPE_PRICE_ID_ETIER_SCALE_1_MONTHLY:
+      return "etierscale1";
     default:
       return "free";
   }

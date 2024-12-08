@@ -155,7 +155,7 @@ export const scrapeOptions = z.object({
 export type ScrapeOptions = z.infer<typeof scrapeOptions>;
 
 export const extractV1Options = z.object({
-  urls: url.array(),
+  urls: url.array().max(10, "Maximum of 10 URLs allowed per request while in beta."),
   prompt: z.string().optional(),
   schema: z.any().optional(),
   limit: z.number().int().positive().finite().safe().optional(),
@@ -210,6 +210,7 @@ export const batchScrapeRequestSchema = scrapeOptions.extend({
   urls: url.array(),
   origin: z.string().optional().default("api"),
   webhook: webhookSchema.optional(),
+  appendToId: z.string().uuid().optional(),
 }).strict(strictMessage).refine(
   (obj) => {
     const hasExtractFormat = obj.formats?.includes("extract");
@@ -232,7 +233,7 @@ const crawlerOptions = z.object({
   allowExternalLinks: z.boolean().default(false),
   allowSubdomains: z.boolean().default(false),
   ignoreRobotsTxt: z.boolean().default(false),
-  ignoreSitemap: z.boolean().default(true),
+  ignoreSitemap: z.boolean().default(false),
   deduplicateSimilarURLs: z.boolean().default(true),
   ignoreQueryParameters: z.boolean().default(false),
 }).strict(strictMessage);

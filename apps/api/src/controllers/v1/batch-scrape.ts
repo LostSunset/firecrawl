@@ -5,18 +5,20 @@ import {
   batchScrapeRequestSchema,
   CrawlResponse,
   RequestWithAuth,
+  ScrapeOptions,
 } from "./types";
 import {
   addCrawlJobs,
+  getCrawl,
   lockURLs,
   saveCrawl,
   StoredCrawl,
 } from "../../lib/crawl-redis";
 import { logCrawl } from "../../services/logging/crawl_log";
-import { getScrapeQueue } from "../../services/queue-service";
 import { getJobPriority } from "../../lib/job-priority";
 import { addScrapeJobs } from "../../services/queue-jobs";
 import { callWebhook } from "../../services/webhook";
+import { logger as _logger } from "../../lib/logger";
 
 export async function batchScrapeController(
   req: RequestWithAuth<{}, CrawlResponse, BatchScrapeRequest>,
@@ -24,9 +26,13 @@ export async function batchScrapeController(
 ) {
   req.body = batchScrapeRequestSchema.parse(req.body);
 
-  const id = uuidv4();
+  const id = req.body.appendToId ?? uuidv4();
+  const logger = _logger.child({ crawlId: id, batchScrapeId: id, module: "api/v1", method: "batchScrapeController", teamId: req.auth.team_id, plan: req.auth.plan });
+  logger.debug("Batch scrape " + id + " starting", { urlsLength: req.body.urls, appendToId: req.body.appendToId, account: req.account });
 
-  await logCrawl(id, req.auth.team_id);
+  if (!req.body.appendToId) {
+    await logCrawl(id, req.auth.team_id);
+  }
 
   let { remainingCredits } = req.account!;
   const useDbAuthentication = process.env.USE_DB_AUTHENTICATION === 'true';
@@ -34,7 +40,7 @@ export async function batchScrapeController(
     remainingCredits = Infinity;
   }
 
-  const sc: StoredCrawl = {
+  const sc: StoredCrawl = req.body.appendToId ? await getCrawl(req.body.appendToId) as StoredCrawl : {
     crawlerOptions: null,
     scrapeOptions: req.body,
     internalOptions: {},
@@ -43,7 +49,9 @@ export async function batchScrapeController(
     plan: req.auth.plan,
   };
 
-  await saveCrawl(id, sc);
+  if (!req.body.appendToId) {
+    await saveCrawl(id, sc);
+  }
 
   let jobPriority = 20;
 
@@ -53,6 +61,11 @@ export async function batchScrapeController(
     // set base to 21
     jobPriority = await getJobPriority({plan: req.auth.plan, team_id: req.auth.team_id, basePriority: 21})
   }
+  logger.debug("Using job priority " + jobPriority, { jobPriority });
+
+  const scrapeOptions: ScrapeOptions = { ...req.body };
+  delete (scrapeOptions as any).urls;
+  delete (scrapeOptions as any).appendToId;
 
   const jobs = req.body.urls.map((x) => {
     return {
@@ -62,7 +75,7 @@ export async function batchScrapeController(
         team_id: req.auth.team_id,
         plan: req.auth.plan!,
         crawlerOptions: null,
-        scrapeOptions: req.body,
+        scrapeOptions,
         origin: "api",
         crawl_id: id,
         sitemapped: true,
@@ -76,18 +89,22 @@ export async function batchScrapeController(
     };
   });
 
+  logger.debug("Locking URLs...");
   await lockURLs(
     id,
     sc,
     jobs.map((x) => x.data.url)
   );
+  logger.debug("Adding scrape jobs to Redis...");
   await addCrawlJobs(
     id,
     jobs.map((x) => x.opts.jobId)
   );
+  logger.debug("Adding scrape jobs to BullMQ...");
   await addScrapeJobs(jobs);
 
   if(req.body.webhook) {
+    logger.debug("Calling webhook with batch_scrape.started...", { webhook: req.body.webhook });
     await callWebhook(req.auth.team_id, id, null, req.body.webhook, true, "batch_scrape.started");
   }
 
