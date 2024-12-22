@@ -7,7 +7,7 @@ import {
 import { billTeam } from "../services/billing/credit_billing";
 import { Document } from "../controllers/v1/types";
 import { supabase_service } from "../services/supabase";
-import { logger } from "../lib/logger";
+import { logger as _logger } from "../lib/logger";
 import { ScrapeEvents } from "../lib/scrape-events";
 import { configDotenv } from "dotenv";
 import {
@@ -66,6 +66,12 @@ export async function runWebScraper({
   is_scrape = false,
   is_crawl = false,
 }: RunWebScraperParams): Promise<ScrapeUrlResponse> {
+  const logger = _logger.child({
+    method: "runWebScraper",
+    module: "runWebscraper",
+    scrapeId: bull_job_id,
+    jobId: bull_job_id,
+  });
   const tries = is_crawl ? 3 : 1;
 
   let response: ScrapeUrlResponse | undefined = undefined;
@@ -74,7 +80,12 @@ export async function runWebScraper({
 
   for (let i = 0; i < tries; i++) {
     if (i > 0) {
-      logger.debug("Retrying scrape...", { scrapeId: bull_job_id, jobId: bull_job_id, method: "runWebScraper", module: "runWebScraper", tries, i, previousStatusCode: (response as any)?.document?.metadata?.statusCode, previousError: error });
+      logger.debug("Retrying scrape...", {
+        tries,
+        i,
+        previousStatusCode: (response as any)?.document?.metadata?.statusCode,
+        previousError: error,
+      });
     }
 
     response = undefined;
@@ -100,17 +111,22 @@ export async function runWebScraper({
           );
         }
       }
-  
+
       // This is where the returnvalue from the job is set
       // onSuccess(response.document, mode);
-  
+
       engines = response.engines;
 
-      if ((response.document.metadata.statusCode >= 200 && response.document.metadata.statusCode < 300) || response.document.metadata.statusCode === 304) {
+      if (
+        (response.document.metadata.statusCode >= 200 &&
+          response.document.metadata.statusCode < 300) ||
+        response.document.metadata.statusCode === 304
+      ) {
         // status code is good -- do not attempt retry
         break;
       }
-    } catch (error) {
+    } catch (_error) {
+      error = _error;
       engines =
         response !== undefined
           ? response.engines
@@ -121,34 +137,34 @@ export async function runWebScraper({
   }
 
   const engineOrder = Object.entries(engines)
-      .sort((a, b) => a[1].startedAt - b[1].startedAt)
-      .map((x) => x[0]) as Engine[];
+    .sort((a, b) => a[1].startedAt - b[1].startedAt)
+    .map((x) => x[0]) as Engine[];
 
-    for (const engine of engineOrder) {
-      const result = engines[engine] as Exclude<
-        EngineResultsTracker[Engine],
-        undefined
-      >;
-      ScrapeEvents.insert(bull_job_id, {
-        type: "scrape",
-        url,
-        method: engine,
-        result: {
-          success: result.state === "success",
-          response_code:
-            result.state === "success" ? result.result.statusCode : undefined,
-          response_size:
-            result.state === "success" ? result.result.html.length : undefined,
-          error:
-            result.state === "error"
-              ? result.error
-              : result.state === "timeout"
-                ? "Timed out"
-                : undefined,
-          time_taken: result.finishedAt - result.startedAt,
-        },
-      });
-    }
+  for (const engine of engineOrder) {
+    const result = engines[engine] as Exclude<
+      EngineResultsTracker[Engine],
+      undefined
+    >;
+    ScrapeEvents.insert(bull_job_id, {
+      type: "scrape",
+      url,
+      method: engine,
+      result: {
+        success: result.state === "success",
+        response_code:
+          result.state === "success" ? result.result.statusCode : undefined,
+        response_size:
+          result.state === "success" ? result.result.html.length : undefined,
+        error:
+          result.state === "error"
+            ? result.error
+            : result.state === "timeout"
+              ? "Timed out"
+              : undefined,
+        time_taken: result.finishedAt - result.startedAt,
+      },
+    });
+  }
 
   if (error === undefined && response?.success) {
     if (is_scrape === false) {
@@ -157,9 +173,10 @@ export async function runWebScraper({
         creditsToBeBilled = 5;
       }
 
-      billTeam(team_id, undefined, creditsToBeBilled).catch((error) => {
+      billTeam(team_id, undefined, creditsToBeBilled, logger).catch((error) => {
         logger.error(
-          `Failed to bill team ${team_id} for ${creditsToBeBilled} credits: ${error}`,
+          `Failed to bill team ${team_id} for ${creditsToBeBilled} credits`,
+          { error },
         );
         // Optionally, you could notify an admin or add to a retry queue here
       });
@@ -218,6 +235,11 @@ const saveJob = async (
     }
     ScrapeEvents.logJobEvent(job, "completed");
   } catch (error) {
-    logger.error(`🐂 Failed to update job status: ${error}`);
+    _logger.error(`🐂 Failed to update job status`, {
+      module: "runWebScraper",
+      method: "saveJob",
+      jobId: job.id,
+      scrapeId: job.id,
+    });
   }
 };
