@@ -199,6 +199,7 @@ export const extractV1Options = z
     includeSubdomains: z.boolean().default(true),
     allowExternalLinks: z.boolean().default(false),
     origin: z.string().optional().default("api"),
+    urlTrace: z.boolean().default(false),
     timeout: z.number().int().positive().finite().safe().default(60000),
   })
   .strict(strictMessage);
@@ -378,17 +379,20 @@ export const mapRequestSchema = crawlerOptions
 export type MapRequest = z.infer<typeof mapRequestSchema>;
 
 export type Document = {
+  title?: string;
+  description?: string;
+  url?: string;
   markdown?: string;
-  extract?: any;
   html?: string;
   rawHtml?: string;
   links?: string[];
   screenshot?: string;
+  extract?: any;
+  warning?: string;
   actions?: {
     screenshots?: string[];
     scrapes?: ScrapeActionContent[];
   };
-  warning?: string;
   metadata: {
     title?: string;
     description?: string;
@@ -425,7 +429,12 @@ export type Document = {
     error?: string;
     [key: string]: string | string[] | number | undefined;
   };
-};
+  serpResults?: {
+    title: string;
+    description: string;
+    url: string;
+  };
+}
 
 export type ErrorResponse = {
   success: false;
@@ -448,14 +457,33 @@ export interface ScrapeResponseRequestTest {
   error?: string;
 }
 
-export type ExtractResponse =
-  | ErrorResponse
-  | {
-      success: true;
-      warning?: string;
-      data: z.infer<typeof extractRequestSchema>;
-      scrape_id?: string;
-    };
+export interface URLTrace {
+  url: string;
+  status: 'mapped' | 'scraped' | 'error';
+  timing: {
+    discoveredAt: string;
+    scrapedAt?: string;
+    completedAt?: string;
+  };
+  error?: string;
+  warning?: string;
+  contentStats?: {
+    rawContentLength: number;
+    processedContentLength: number;
+    tokensUsed: number;
+  };
+  relevanceScore?: number;
+  usedInCompletion?: boolean;
+}
+
+export interface ExtractResponse {
+  success: boolean;
+  data?: any;
+  scrape_id?: string;
+  warning?: string;
+  error?: string;
+  urlTrace?: URLTrace[];
+}
 
 export interface ExtractResponseRequestTest {
   statusCode: number;
@@ -737,3 +765,36 @@ export function toLegacyDocument(
     warning: document.warning,
   };
 }
+
+export const searchRequestSchema = z.object({
+  query: z.string(),
+  limit: z.number().int().positive().finite().safe().max(10).optional().default(5),
+  tbs: z.string().optional(),
+  filter: z.string().optional(),
+  lang: z.string().optional().default("en"),
+  country: z.string().optional().default("us"),
+  location: z.string().optional(),
+  origin: z.string().optional().default("api"),
+  timeout: z.number().int().positive().finite().safe().default(60000),
+  scrapeOptions: scrapeOptions.extend({
+    formats: z.array(z.enum([
+      "markdown",
+      "html", 
+      "rawHtml",
+      "links",
+      "screenshot",
+      "screenshot@fullPage",
+      "extract"
+    ])).default([])
+  }).default({}),
+}).strict("Unrecognized key in body -- please review the v1 API documentation for request body changes");
+
+export type SearchRequest = z.infer<typeof searchRequestSchema>;
+
+export type SearchResponse =
+  | ErrorResponse
+  | {
+      success: true;
+      warning?: string;
+      data: Document[];
+    };
