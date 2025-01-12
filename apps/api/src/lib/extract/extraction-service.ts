@@ -9,6 +9,8 @@ import { billTeam } from "../../services/billing/credit_billing";
 import { logJob } from "../../services/logging/log_job";
 import { _addScrapeJobToBullMQ } from "../../services/queue-jobs";
 import { saveCrawl, StoredCrawl } from "../crawl-redis";
+import { updateExtract } from "./extract-redis";
+import { CUSTOM_U_TEAMS } from "./config";
 
 interface ExtractServiceOptions {
   request: ExtractRequest;
@@ -20,7 +22,7 @@ interface ExtractServiceOptions {
 interface ExtractResult {
   success: boolean;
   data?: any;
-  scrapeId: string;
+  extractId: string;
   warning?: string;
   urlTrace?: URLTrace[];
   error?: string;
@@ -28,7 +30,7 @@ interface ExtractResult {
 
 function getRootDomain(url: string): string {
   try {
-    if(url.endsWith("/*")) {
+    if (url.endsWith("/*")) {
       url = url.slice(0, -2);
     }
     const urlObj = new URL(url);
@@ -38,48 +40,57 @@ function getRootDomain(url: string): string {
   }
 }
 
-export async function performExtraction(options: ExtractServiceOptions): Promise<ExtractResult> {
+export async function performExtraction(
+  extractId: string,
+  options: ExtractServiceOptions,
+): Promise<ExtractResult> {
   const { request, teamId, plan, subId } = options;
-  const scrapeId = crypto.randomUUID();
   const urlTraces: URLTrace[] = [];
   let docs: Document[] = [];
 
   // Process URLs
-  const urlPromises = request.urls.map(url => 
-    processUrl({
-      url,
-      prompt: request.prompt,
-      teamId,
-      plan,
-      allowExternalLinks: request.allowExternalLinks,
-      origin: request.origin,
-      limit: request.limit,
-      includeSubdomains: request.includeSubdomains,
-    }, urlTraces)
+  const urlPromises = request.urls.map((url) =>
+    processUrl(
+      {
+        url,
+        prompt: request.prompt,
+        teamId,
+        plan,
+        allowExternalLinks: request.allowExternalLinks,
+        origin: request.origin,
+        limit: request.limit,
+        includeSubdomains: request.includeSubdomains,
+      },
+      urlTraces,
+    ),
   );
 
   const processedUrls = await Promise.all(urlPromises);
-  const links = processedUrls.flat().filter(url => url);
+  const links = processedUrls.flat().filter((url) => url);
 
   if (links.length === 0) {
     return {
       success: false,
-      error: "No valid URLs found to scrape. Try adjusting your search criteria or including more URLs.",
-      scrapeId,
+      error:
+        "No valid URLs found to scrape. Try adjusting your search criteria or including more URLs.",
+      extractId,
       urlTrace: urlTraces,
     };
   }
 
   // Scrape documents
   const timeout = Math.floor((request.timeout || 40000) * 0.7) || 30000;
-  const scrapePromises = links.map(url =>
-    scrapeDocument({
-      url,
-      teamId,
-      plan,
-      origin: request.origin || "api",
-      timeout,
-    }, urlTraces)
+  const scrapePromises = links.map((url) =>
+    scrapeDocument(
+      {
+        url,
+        teamId,
+        plan,
+        origin: request.origin || "api",
+        timeout,
+      },
+      urlTraces,
+    ),
   );
 
   try {
@@ -89,7 +100,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     return {
       success: false,
       error: error.message,
-      scrapeId,
+      extractId,
       urlTrace: urlTraces,
     };
   }
@@ -113,13 +124,16 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
 
   // Update token usage in traces
   if (completions.numTokens) {
-    const totalLength = docs.reduce((sum, doc) => sum + (doc.markdown?.length || 0), 0);
+    const totalLength = docs.reduce(
+      (sum, doc) => sum + (doc.markdown?.length || 0),
+      0,
+    );
     docs.forEach((doc) => {
       if (doc.metadata?.sourceURL) {
         const trace = urlTraces.find((t) => t.url === doc.metadata.sourceURL);
         if (trace && trace.contentStats) {
           trace.contentStats.tokensUsed = Math.floor(
-            ((doc.markdown?.length || 0) / totalLength) * completions.numTokens
+            ((doc.markdown?.length || 0) / totalLength) * completions.numTokens,
           );
         }
       }
@@ -130,7 +144,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
   // const rootDomains = new Set(request.urls.map(getRootDomain));
   // rootDomains.forEach(async url => {
   //   const crawlId = crypto.randomUUID();
-    
+
   //   // Create and save crawl configuration first
   //   const sc: StoredCrawl = {
   //     originUrl: url,
@@ -154,7 +168,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
   //         parsePDF: true,
   //         skipTlsVerification: false,
   //     },
-  //     internalOptions: { 
+  //     internalOptions: {
   //       disableSmartWaitCache: true,
   //       isBackgroundIndex: true
   //     },
@@ -182,16 +196,21 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
   //   }, {}, crypto.randomUUID(), 50);
   // });
 
+  let linksBilled = links.length * 5;
+
+  if (CUSTOM_U_TEAMS.includes(teamId)) {
+    linksBilled = 1;
+  }
   // Bill team for usage
-  billTeam(teamId, subId, links.length * 5).catch((error) => {
+  billTeam(teamId, subId, linksBilled).catch((error) => {
     logger.error(
-      `Failed to bill team ${teamId} for ${links.length * 5} credits: ${error}`,
+      `Failed to bill team ${teamId} for ${linksBilled} credits: ${error}`,
     );
   });
 
   // Log job
   logJob({
-    job_id: scrapeId,
+    job_id: extractId,
     success: true,
     message: "Extract completed",
     num_docs: 1,
@@ -203,13 +222,21 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     scrapeOptions: request,
     origin: request.origin ?? "api",
     num_tokens: completions.numTokens ?? 0,
+  }).then(() => {
+    updateExtract(extractId, {
+      status: "completed",
+    }).catch((error) => {
+      logger.error(
+        `Failed to update extract ${extractId} status to completed: ${error}`,
+      );
+    });
   });
 
   return {
     success: true,
     data: completions.extract ?? {},
-    scrapeId,
+    extractId,
     warning: completions.warning,
     urlTrace: request.urlTrace ? urlTraces : undefined,
   };
-} 
+}

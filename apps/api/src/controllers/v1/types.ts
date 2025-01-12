@@ -186,6 +186,10 @@ export const scrapeOptions = z
 
 export type ScrapeOptions = z.infer<typeof scrapeOptions>;
 
+import Ajv from "ajv";
+
+const ajv = new Ajv();
+
 export const extractV1Options = z
   .object({
     urls: url
@@ -193,7 +197,23 @@ export const extractV1Options = z
       .max(10, "Maximum of 10 URLs allowed per request while in beta."),
     prompt: z.string().optional(),
     systemPrompt: z.string().optional(),
-    schema: z.any().optional(),
+    schema: z
+      .any()
+      .optional()
+      .refine(
+        (val) => {
+          if (!val) return true; // Allow undefined schema
+          try {
+            const validate = ajv.compile(val);
+            return typeof validate === "function";
+          } catch (e) {
+            return false;
+          }
+        },
+        {
+          message: "Invalid JSON schema.",
+        },
+      ),
     limit: z.number().int().positive().finite().safe().optional(),
     ignoreSitemap: z.boolean().default(false),
     includeSubdomains: z.boolean().default(true),
@@ -426,6 +446,7 @@ export type Document = {
     url?: string;
     sourceURL?: string;
     statusCode: number;
+    scrapeId?: string;
     error?: string;
     [key: string]: string | string[] | number | undefined;
   };
@@ -434,7 +455,7 @@ export type Document = {
     description: string;
     url: string;
   };
-}
+};
 
 export type ErrorResponse = {
   success: false;
@@ -459,7 +480,7 @@ export interface ScrapeResponseRequestTest {
 
 export interface URLTrace {
   url: string;
-  status: 'mapped' | 'scraped' | 'error';
+  status: "mapped" | "scraped" | "error";
   timing: {
     discoveredAt: string;
     scrapedAt?: string;
@@ -478,10 +499,11 @@ export interface URLTrace {
 
 export interface ExtractResponse {
   success: boolean;
+  error?: string;
   data?: any;
   scrape_id?: string;
+  id?: string;
   warning?: string;
-  error?: string;
   urlTrace?: URLTrace[];
 }
 
@@ -766,28 +788,46 @@ export function toLegacyDocument(
   };
 }
 
-export const searchRequestSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().positive().finite().safe().max(10).optional().default(5),
-  tbs: z.string().optional(),
-  filter: z.string().optional(),
-  lang: z.string().optional().default("en"),
-  country: z.string().optional().default("us"),
-  location: z.string().optional(),
-  origin: z.string().optional().default("api"),
-  timeout: z.number().int().positive().finite().safe().default(60000),
-  scrapeOptions: scrapeOptions.extend({
-    formats: z.array(z.enum([
-      "markdown",
-      "html", 
-      "rawHtml",
-      "links",
-      "screenshot",
-      "screenshot@fullPage",
-      "extract"
-    ])).default([])
-  }).default({}),
-}).strict("Unrecognized key in body -- please review the v1 API documentation for request body changes");
+export const searchRequestSchema = z
+  .object({
+    query: z.string(),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .finite()
+      .safe()
+      .max(10)
+      .optional()
+      .default(5),
+    tbs: z.string().optional(),
+    filter: z.string().optional(),
+    lang: z.string().optional().default("en"),
+    country: z.string().optional().default("us"),
+    location: z.string().optional(),
+    origin: z.string().optional().default("api"),
+    timeout: z.number().int().positive().finite().safe().default(60000),
+    scrapeOptions: scrapeOptions
+      .extend({
+        formats: z
+          .array(
+            z.enum([
+              "markdown",
+              "html",
+              "rawHtml",
+              "links",
+              "screenshot",
+              "screenshot@fullPage",
+              "extract",
+            ]),
+          )
+          .default([]),
+      })
+      .default({}),
+  })
+  .strict(
+    "Unrecognized key in body -- please review the v1 API documentation for request body changes",
+  );
 
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
 
