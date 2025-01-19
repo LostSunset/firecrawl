@@ -65,6 +65,7 @@ export interface FirecrawlDocument<T = any, ActionsSchema extends (ActionsResult
   rawHtml?: string;
   links?: string[];
   extract?: T;
+  json?: T;
   screenshot?: string;
   metadata?: FirecrawlDocumentMetadata;
   actions: ActionsSchema;
@@ -78,7 +79,7 @@ export interface FirecrawlDocument<T = any, ActionsSchema extends (ActionsResult
  * Defines the options and configurations available for scraping web content.
  */
 export interface CrawlScrapeOptions {
-  formats: ("markdown" | "html" | "rawHtml" | "content" | "links" | "screenshot" | "screenshot@fullPage" | "extract")[];
+  formats: ("markdown" | "html" | "rawHtml" | "content" | "links" | "screenshot" | "screenshot@fullPage" | "extract" | "json")[];
   headers?: Record<string, string>;
   includeTags?: string[];
   excludeTags?: string[];
@@ -127,6 +128,11 @@ export interface ScrapeParams<LLMSchema extends zt.ZodSchema = any, ActionsSchem
     schema?: LLMSchema;
     systemPrompt?: string;
   };
+  jsonOptions?:{
+    prompt?: string;
+    schema?: LLMSchema;
+    systemPrompt?: string;
+  }
   actions?: ActionsSchema;
 }
 
@@ -251,6 +257,7 @@ export interface ExtractParams<LLMSchema extends zt.ZodSchema = any> {
   systemPrompt?: string;
   allowExternalLinks?: boolean;
   includeSubdomains?: boolean;
+  origin?: string;
 }
 
 /**
@@ -279,9 +286,11 @@ export interface ErrorResponse {
  */
 export class FirecrawlError extends Error {
   statusCode: number;
-  constructor(message: string, statusCode: number) {
+  details?: any;
+  constructor(message: string, statusCode: number, details?: any) {
     super(message);
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
@@ -311,6 +320,26 @@ export interface SearchResponse {
   warning?: string;
   error?: string;
 }
+
+/**
+ * Response interface for crawl/batch scrape error monitoring.
+ */
+export interface CrawlErrorsResponse {
+  /**
+   * Scrapes that errored out + error details
+   */
+  errors: {
+    id: string,
+    timestamp?: string,
+    url: string,
+    error: string,
+  }[];
+
+  /**
+   * URLs blocked by robots.txt
+   */
+  robotsBlocked: string[];
+};
 
 /**
  * Main class for interacting with the Firecrawl API.
@@ -367,6 +396,23 @@ export default class FirecrawlApp {
         ...jsonData,
         extract: {
           ...jsonData.extract,
+          schema: schema,
+        },
+      };
+    }
+
+    if (jsonData?.jsonOptions?.schema) {
+      let schema = jsonData.jsonOptions.schema;
+      // Try parsing the schema as a Zod schema
+      try {
+        schema = zodToJsonSchema(schema);
+      } catch (error) {
+        
+      }
+      jsonData = {
+        ...jsonData,
+        jsonOptions: {
+          ...jsonData.jsonOptions,
           schema: schema,
         },
       };
@@ -545,17 +591,28 @@ export default class FirecrawlApp {
    * Checks the status of a crawl job using the Firecrawl API.
    * @param id - The ID of the crawl operation.
    * @param getAllData - Paginate through all the pages of documents, returning the full list of all documents. (default: `false`)
+   * @param nextURL - The `next` URL from the previous crawl status. Only required if you're not manually increasing `skip`. Only used when `getAllData = false`.
+   * @param skip - How many entries to skip to paginate. Only required if you're not providing `nextURL`. Only used when `getAllData = false`.
+   * @param limit - How many entries to return. Only used when `getAllData = false`.
    * @returns The response containing the job status.
    */
-  async checkCrawlStatus(id?: string, getAllData = false): Promise<CrawlStatusResponse | ErrorResponse> {
+  async checkCrawlStatus(id?: string, getAllData = false, nextURL?: string, skip?: number, limit?: number): Promise<CrawlStatusResponse | ErrorResponse> {
     if (!id) {
       throw new FirecrawlError("No crawl ID provided", 400);
     }
 
     const headers: AxiosRequestHeaders = this.prepareHeaders();
+    const targetURL = new URL(nextURL ?? `${this.apiUrl}/v1/crawl/${id}`);
+    if (skip !== undefined) {
+      targetURL.searchParams.set("skip", skip.toString());
+    }
+    if (limit !== undefined) {
+      targetURL.searchParams.set("skip", limit.toString());
+    }
+
     try {
       const response: AxiosResponse = await this.getRequest(
-        `${this.apiUrl}/v1/crawl/${id}`,
+        targetURL.href,
         headers
       );
       if (response.status === 200) {
@@ -581,6 +638,7 @@ export default class FirecrawlApp {
           total: response.data.total,
           completed: response.data.completed,
           creditsUsed: response.data.creditsUsed,
+          next: getAllData ? undefined : response.data.next,
           expiresAt: new Date(response.data.expiresAt),
           data: allData
         }
@@ -600,6 +658,29 @@ export default class FirecrawlApp {
         return resp;
       } else {
         this.handleError(response, "check crawl status");
+      }
+    } catch (error: any) {
+      throw new FirecrawlError(error.message, 500);
+    }
+    return { success: false, error: "Internal server error." };
+  }
+
+  /**
+   * Returns information about crawl errors.
+   * @param id - The ID of the crawl operation.
+   * @returns Information about crawl errors.
+   */
+  async checkCrawlErrors(id: string): Promise<CrawlErrorsResponse | ErrorResponse> {
+    const headers = this.prepareHeaders();
+    try {
+      const response: AxiosResponse = await this.deleteRequest(
+        `${this.apiUrl}/v1/crawl/${id}/errors`,
+        headers
+      );
+      if (response.status === 200) {
+        return response.data;
+      } else {
+        this.handleError(response, "check crawl errors");
       }
     } catch (error: any) {
       throw new FirecrawlError(error.message, 500);
@@ -715,6 +796,23 @@ export default class FirecrawlApp {
         },
       };
     }
+    if (jsonData?.jsonOptions?.schema) {
+      let schema = jsonData.jsonOptions.schema;
+
+      // Try parsing the schema as a Zod schema
+      try {
+        schema = zodToJsonSchema(schema);
+      } catch (error) {
+        
+      }
+      jsonData = {
+        ...jsonData,
+        jsonOptions: {
+          ...jsonData.jsonOptions,
+          schema: schema,
+        },
+      };
+    }
     try {
       const response: AxiosResponse = await this.postRequest(
         this.apiUrl + `/v1/batch/scrape`,
@@ -795,17 +893,28 @@ export default class FirecrawlApp {
    * Checks the status of a batch scrape job using the Firecrawl API.
    * @param id - The ID of the batch scrape operation.
    * @param getAllData - Paginate through all the pages of documents, returning the full list of all documents. (default: `false`)
+   * @param nextURL - The `next` URL from the previous batch scrape status. Only required if you're not manually increasing `skip`. Only used when `getAllData = false`.
+   * @param skip - How many entries to skip to paginate. Only used when `getAllData = false`.
+   * @param limit - How many entries to return. Only used when `getAllData = false`.
    * @returns The response containing the job status.
    */
-  async checkBatchScrapeStatus(id?: string, getAllData = false): Promise<BatchScrapeStatusResponse | ErrorResponse> {
+  async checkBatchScrapeStatus(id?: string, getAllData = false, nextURL?: string, skip?: number, limit?: number): Promise<BatchScrapeStatusResponse | ErrorResponse> {
     if (!id) {
       throw new FirecrawlError("No batch scrape ID provided", 400);
     }
 
     const headers: AxiosRequestHeaders = this.prepareHeaders();
+    const targetURL = new URL(nextURL ?? `${this.apiUrl}/v1/batch/scrape/${id}`);
+    if (skip !== undefined) {
+      targetURL.searchParams.set("skip", skip.toString());
+    }
+    if (limit !== undefined) {
+      targetURL.searchParams.set("skip", limit.toString());
+    }
+
     try {
       const response: AxiosResponse = await this.getRequest(
-        `${this.apiUrl}/v1/batch/scrape/${id}`,
+        targetURL.href,
         headers
       );
       if (response.status === 200) {
@@ -831,6 +940,7 @@ export default class FirecrawlApp {
           total: response.data.total,
           completed: response.data.completed,
           creditsUsed: response.data.creditsUsed,
+          next: getAllData ? undefined : response.data.next,
           expiresAt: new Date(response.data.expiresAt),
           data: allData
         }
@@ -850,6 +960,29 @@ export default class FirecrawlApp {
         return resp;
       } else {
         this.handleError(response, "check batch scrape status");
+      }
+    } catch (error: any) {
+      throw new FirecrawlError(error.message, 500);
+    }
+    return { success: false, error: "Internal server error." };
+  }
+
+  /**
+   * Returns information about batch scrape errors.
+   * @param id - The ID of the batch scrape operation.
+   * @returns Information about batch scrape errors.
+   */
+  async checkBatchScrapeErrors(id: string): Promise<CrawlErrorsResponse | ErrorResponse> {
+    const headers = this.prepareHeaders();
+    try {
+      const response: AxiosResponse = await this.deleteRequest(
+        `${this.apiUrl}/v1/batch/scrape/${id}/errors`,
+        headers
+      );
+      if (response.status === 200) {
+        return response.data;
+      } else {
+        this.handleError(response, "check batch scrape errors");
       }
     } catch (error: any) {
       throw new FirecrawlError(error.message, 500);
@@ -881,10 +1014,11 @@ export default class FirecrawlApp {
       throw new FirecrawlError("Invalid schema. Schema must be either a valid Zod schema or JSON schema object.", 400);
     }
 
+    
     try {
       const response: AxiosResponse = await this.postRequest(
         this.apiUrl + `/v1/extract`,
-        { ...jsonData, schema: jsonSchema, origin: "api-sdk" },
+        { ...jsonData, schema: jsonSchema, origin: params?.origin || "api-sdk" },
         headers
       );
 
@@ -917,9 +1051,9 @@ export default class FirecrawlApp {
         this.handleError(response, "extract");
       }
     } catch (error: any) {
-      throw new FirecrawlError(error.message, 500);
+      throw new FirecrawlError(error.message, 500, error.response?.data?.details);
     }
-    return { success: false, error: "Internal server error." };
+    return { success: false, error: "Internal server error."};
   }
 
   /**
@@ -930,12 +1064,12 @@ export default class FirecrawlApp {
    * @returns The response from the extract operation.
    */
   async asyncExtract(
-    url: string,
+    urls: string[],
     params?: ExtractParams,
     idempotencyKey?: string
   ): Promise<ExtractResponse | ErrorResponse> {
     const headers = this.prepareHeaders(idempotencyKey);
-    let jsonData: any = { url, ...params };
+    let jsonData: any = { urls, ...params };
     let jsonSchema: any;
 
     try {
@@ -961,7 +1095,7 @@ export default class FirecrawlApp {
         this.handleError(response, "start extract job");
       }
     } catch (error: any) {
-      throw new FirecrawlError(error.message, 500);
+      throw new FirecrawlError(error.message, 500, error.response?.data?.details);
     }
     return { success: false, error: "Internal server error." };
   }
@@ -1123,12 +1257,14 @@ export default class FirecrawlApp {
    * @param {string} action - The action being performed when the error occurred.
    */
   handleError(response: AxiosResponse, action: string): void {
-    if ([402, 408, 409, 500].includes(response.status)) {
+    if ([400, 402, 408, 409, 500].includes(response.status)) {
       const errorMessage: string =
         response.data.error || "Unknown error occurred";
+      const details = response.data.details ? ` - ${JSON.stringify(response.data.details)}` : '';
       throw new FirecrawlError(
-        `Failed to ${action}. Status code: ${response.status}. Error: ${errorMessage}`,
-        response.status
+        `Failed to ${action}. Status code: ${response.status}. Error: ${errorMessage}${details}`,
+        response.status,
+        response?.data?.details
       );
     } else {
       throw new FirecrawlError(

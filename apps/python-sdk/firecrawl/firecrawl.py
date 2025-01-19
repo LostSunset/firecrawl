@@ -112,6 +112,18 @@ class FirecrawlApp:
                 if key not in ['extract']:
                     scrape_params[key] = value
 
+            json = params.get("jsonOptions", {})
+            if json:
+                if 'schema' in json and hasattr(json['schema'], 'schema'):
+                    json['schema'] = json['schema'].schema()
+                scrape_params['jsonOptions'] = json
+
+            # Include any other params directly at the top level of scrape_params
+            for key, value in params.items():
+                if key not in ['jsonOptions']:
+                    scrape_params[key] = value
+
+
         endpoint = f'/v1/scrape'
         # Make the POST request with the prepared headers and JSON data
         response = requests.post(
@@ -120,7 +132,10 @@ class FirecrawlApp:
             json=scrape_params,
         )
         if response.status_code == 200:
-            response = response.json()
+            try:
+                response = response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             if response['success'] and 'data' in response:
                 return response['data']
             elif "error" in response:
@@ -159,7 +174,10 @@ class FirecrawlApp:
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}")
 
-        return response.json()
+        try:
+            return response.json()
+        except:
+            raise Exception(f'Failed to parse Firecrawl response as JSON.')
 
     def crawl_url(self, url: str,
                   params: Optional[Dict[str, Any]] = None,
@@ -194,7 +212,10 @@ class FirecrawlApp:
             json_data.update(params)
         response = self._post_request(f'{self.api_url}{endpoint}', json_data, headers)
         if response.status_code == 200:
-            id = response.json().get('id')
+            try:
+                id = response.json().get('id')
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             return self._monitor_job_status(id, headers, poll_interval)
 
         else:
@@ -223,7 +244,10 @@ class FirecrawlApp:
             json_data.update(params)
         response = self._post_request(f'{self.api_url}{endpoint}', json_data, headers)
         if response.status_code == 200:
-            return response.json()
+            try:
+                return response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
         else:
             self._handle_error(response, 'start crawl job')
 
@@ -245,7 +269,10 @@ class FirecrawlApp:
         headers = self._prepare_headers()
         response = self._get_request(f'{self.api_url}{endpoint}', headers)
         if response.status_code == 200:
-            status_data = response.json()
+            try:
+                status_data = response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             if status_data['status'] == 'completed':
                 if 'data' in status_data:
                     data = status_data['data']
@@ -261,7 +288,10 @@ class FirecrawlApp:
                             if status_response.status_code != 200:
                                 logger.error(f"Failed to fetch next page: {status_response.status_code}")
                                 break
-                            next_data = status_response.json()
+                            try:
+                                next_data = status_response.json()
+                            except:
+                                raise Exception(f'Failed to parse Firecrawl response as JSON.')
                             data.extend(next_data.get('data', []))
                             status_data = next_data
                         except Exception as e:
@@ -291,6 +321,26 @@ class FirecrawlApp:
         else:
             self._handle_error(response, 'check crawl status')
     
+    def check_crawl_errors(self, id: str) -> Dict[str, Any]:
+        """
+        Returns information about crawl errors.
+
+        Args:
+            id (str): The ID of the crawl job.
+
+        Returns:
+            Dict[str, Any]: Information about crawl errors.
+        """
+        headers = self._prepare_headers()
+        response = self._get_request(f'{self.api_url}/v1/crawl/{id}/errors', headers)
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
+        else:
+            self._handle_error(response, "check crawl errors")
+    
     def cancel_crawl(self, id: str) -> Dict[str, Any]:
         """
         Cancel an asynchronous crawl job using the Firecrawl API.
@@ -304,7 +354,10 @@ class FirecrawlApp:
         headers = self._prepare_headers()
         response = self._delete_request(f'{self.api_url}/v1/crawl/{id}', headers)
         if response.status_code == 200:
-            return response.json()
+            try:
+                return response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
         else:
             self._handle_error(response, "cancel crawl job")
 
@@ -352,7 +405,10 @@ class FirecrawlApp:
             json=json_data,
         )
         if response.status_code == 200:
-            response = response.json()
+            try:
+                response = response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             if response['success'] and 'links' in response:
                 return response
             elif 'error' in response:
@@ -395,7 +451,10 @@ class FirecrawlApp:
             json_data.update(params)
         response = self._post_request(f'{self.api_url}{endpoint}', json_data, headers)
         if response.status_code == 200:
-            id = response.json().get('id')
+            try:
+                id = response.json().get('id')
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             return self._monitor_job_status(id, headers, poll_interval)
 
         else:
@@ -424,7 +483,10 @@ class FirecrawlApp:
             json_data.update(params)
         response = self._post_request(f'{self.api_url}{endpoint}', json_data, headers)
         if response.status_code == 200:
-            return response.json()
+            try:
+                return response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
         else:
             self._handle_error(response, 'start batch scrape job')
     
@@ -464,7 +526,10 @@ class FirecrawlApp:
         headers = self._prepare_headers()
         response = self._get_request(f'{self.api_url}{endpoint}', headers)
         if response.status_code == 200:
-            status_data = response.json()
+            try:
+                status_data = response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
             if status_data['status'] == 'completed':
                 if 'data' in status_data:
                     data = status_data['data']
@@ -480,7 +545,10 @@ class FirecrawlApp:
                             if status_response.status_code != 200:
                                 logger.error(f"Failed to fetch next page: {status_response.status_code}")
                                 break
-                            next_data = status_response.json()
+                            try:
+                                next_data = status_response.json()
+                            except:
+                                raise Exception(f'Failed to parse Firecrawl response as JSON.')
                             data.extend(next_data.get('data', []))
                             status_data = next_data
                         except Exception as e:
@@ -510,6 +578,25 @@ class FirecrawlApp:
         else:
             self._handle_error(response, 'check batch scrape status')
 
+    def check_batch_scrape_errors(self, id: str) -> Dict[str, Any]:
+        """
+        Returns information about batch scrape errors.
+
+        Args:
+            id (str): The ID of the crawl job.
+
+        Returns:
+            Dict[str, Any]: Information about crawl errors.
+        """
+        headers = self._prepare_headers()
+        response = self._get_request(f'{self.api_url}/v1/batch/scrape/{id}/errors', headers)
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except:
+                raise Exception(f'Failed to parse Firecrawl response as JSON.')
+        else:
+            self._handle_error(response, "check batch scrape errors")
 
     def extract(self, urls: List[str], params: Optional[ExtractParams] = None) -> Any:
         """
@@ -524,8 +611,8 @@ class FirecrawlApp:
         """
         headers = self._prepare_headers()
 
-        if not params or not params.get('prompt'):
-            raise ValueError("Prompt is required")
+        if not params or (not params.get('prompt') and not params.get('schema')):
+            raise ValueError("Either prompt or schema is required")
 
         schema = params.get('schema')
         if schema:
@@ -550,7 +637,10 @@ class FirecrawlApp:
                 headers
             )
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except:
+                    raise Exception(f'Failed to parse Firecrawl response as JSON.')
                 if data['success']:
                     job_id = data.get('id')
                     if not job_id:
@@ -563,7 +653,10 @@ class FirecrawlApp:
                             headers
                         )
                         if status_response.status_code == 200:
-                            status_data = status_response.json()
+                            try:
+                                status_data = status_response.json()
+                            except:
+                                raise Exception(f'Failed to parse Firecrawl response as JSON.')
                             if status_data['status'] == 'completed':
                                 if status_data['success']:
                                     return status_data
@@ -601,7 +694,10 @@ class FirecrawlApp:
         try:
             response = self._get_request(f'{self.api_url}/v1/extract/{job_id}', headers)
             if response.status_code == 200:
-                return response.json()
+                try:
+                    return response.json()
+                except:
+                    raise Exception(f'Failed to parse Firecrawl response as JSON.')
             else:
                 self._handle_error(response, "get extract status")
         except Exception as e:
@@ -641,7 +737,10 @@ class FirecrawlApp:
         try:
             response = self._post_request(f'{self.api_url}/v1/extract', request_data, headers)
             if response.status_code == 200:
-                return response.json()
+                try:
+                    return response.json()
+                except:
+                    raise Exception(f'Failed to parse Firecrawl response as JSON.')
             else:
                 self._handle_error(response, "async extract")
         except Exception as e:
@@ -771,16 +870,22 @@ class FirecrawlApp:
 
             status_response = self._get_request(api_url, headers)
             if status_response.status_code == 200:
-                status_data = status_response.json()
+                try:
+                    status_data = status_response.json()
+                except:
+                    raise Exception(f'Failed to parse Firecrawl response as JSON.')
                 if status_data['status'] == 'completed':
                     if 'data' in status_data:
                         data = status_data['data']
                         while 'next' in status_data:
-                          if len(status_data['data']) == 0:
-                              break
-                          status_response = self._get_request(status_data['next'], headers)
-                          status_data = status_response.json()
-                          data.extend(status_data.get('data', []))
+                            if len(status_data['data']) == 0:
+                                break
+                            status_response = self._get_request(status_data['next'], headers)
+                            try:
+                                status_data = status_response.json()
+                            except:
+                                raise Exception(f'Failed to parse Firecrawl response as JSON.')
+                            data.extend(status_data.get('data', []))
                         status_data['data'] = data
                         return status_data
                     else:
@@ -804,8 +909,12 @@ class FirecrawlApp:
         Raises:
             Exception: An exception with a message containing the status code and error details from the response.
         """
-        error_message = response.json().get('error', 'No error message provided.')
-        error_details = response.json().get('details', 'No additional error details provided.')
+        try:
+            error_message = response.json().get('error', 'No error message provided.')
+            error_details = response.json().get('details', 'No additional error details provided.')
+        except:
+            raise requests.exceptions.HTTPError(f'Failed to parse Firecrawl error response as JSON. Status code: {response.status_code}', response=response)
+        
 
         if response.status_code == 402:
             message = f"Payment Required: Failed to {action}. {error_message} - {error_details}"
