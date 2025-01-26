@@ -18,6 +18,7 @@ import {
   addCrawlJob,
   addCrawlJobs,
   crawlToCrawler,
+  finishCrawlKickoff,
   lockURL,
   lockURLs,
   saveCrawl,
@@ -176,6 +177,8 @@ export async function crawlController(req: Request, res: Response) {
     } catch (_) {}
 
     await saveCrawl(id, sc);
+
+    await finishCrawlKickoff(id);
 
     const sitemap = sc.crawlerOptions.ignoreSitemap
       ? 0

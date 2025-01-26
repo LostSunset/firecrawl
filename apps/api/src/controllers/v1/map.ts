@@ -22,6 +22,7 @@ import { performCosineSimilarity } from "../../lib/map-cosine";
 import { logger } from "../../lib/logger";
 import Redis from "ioredis";
 import { querySitemapIndex } from "../../scraper/WebScraper/sitemap-index";
+import { getIndexQueue } from "../../services/queue-service";
 
 configDotenv();
 const redis = new Redis(process.env.REDIS_URL!);
@@ -100,6 +101,7 @@ export async function getMapResults({
       },
       true,
       true,
+      30000,
     );
     if (sitemap > 0) {
       links = links
@@ -153,14 +155,34 @@ export async function getMapResults({
       await redis.set(cacheKey, JSON.stringify(allResults), "EX", 48 * 60 * 60); // Cache for 48 hours
     }
 
-    // Parallelize sitemap fetch with serper search and sitemap-index
-    const [_, sitemapIndexUrls, ...searchResults] = await Promise.all([
-      ignoreSitemap ? null : crawler.tryGetSitemap(urls => {
-        links.push(...urls);
-      }, true),
+    // Parallelize sitemap index query with search results
+    const [sitemapIndexResult, ...searchResults] = await Promise.all([
       querySitemapIndex(url),
       ...(cachedResult ? [] : pagePromises),
     ]);
+
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+
+    // If sitemap is not ignored and either we have few URLs (<100) or the data is stale (>2 days old), fetch fresh sitemap
+    if (
+      !ignoreSitemap &&
+      (sitemapIndexResult.urls.length < 100 ||
+        new Date(sitemapIndexResult.lastUpdated) < twoDaysAgo)
+    ) {
+      try {
+        await crawler.tryGetSitemap(
+          (urls) => {
+            links.push(...urls);
+          },
+          true,
+          false,
+          30000,
+        );
+      } catch (e) {
+        logger.warn("tryGetSitemap threw an error", { error: e });
+      }
+    }
 
     if (!cachedResult) {
       allResults = searchResults;
@@ -191,7 +213,7 @@ export async function getMapResults({
     }
 
     // Add sitemap-index URLs
-    links.push(...sitemapIndexUrls);
+    links.push(...sitemapIndexResult.urls);
 
     // Perform cosine similarity between the search query and the list of links
     if (search) {
@@ -224,6 +246,19 @@ export async function getMapResults({
   const linksToReturn = crawlerOptions.sitemapOnly
     ? links
     : links.slice(0, limit);
+
+  //
+
+  await getIndexQueue().add(
+    id,
+    {
+      originUrl: url,
+      visitedUrls: linksToReturn,
+    },
+    {
+      priority: 10,
+    },
+  );
 
   return {
     success: true,

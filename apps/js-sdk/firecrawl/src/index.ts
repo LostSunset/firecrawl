@@ -256,6 +256,7 @@ export interface ExtractParams<LLMSchema extends zt.ZodSchema = any> {
   schema?: LLMSchema | object;
   systemPrompt?: string;
   allowExternalLinks?: boolean;
+  enableWebSearch?: boolean;
   includeSubdomains?: boolean;
   origin?: string;
 }
@@ -607,7 +608,7 @@ export default class FirecrawlApp {
       targetURL.searchParams.set("skip", skip.toString());
     }
     if (limit !== undefined) {
-      targetURL.searchParams.set("skip", limit.toString());
+      targetURL.searchParams.set("limit", limit.toString());
     }
 
     try {
@@ -909,7 +910,7 @@ export default class FirecrawlApp {
       targetURL.searchParams.set("skip", skip.toString());
     }
     if (limit !== undefined) {
-      targetURL.searchParams.set("skip", limit.toString());
+      targetURL.searchParams.set("limit", limit.toString());
     }
 
     try {

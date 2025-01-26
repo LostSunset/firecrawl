@@ -8,6 +8,7 @@ import {
   redisConnection,
   scrapeQueueName,
   extractQueueName,
+  getIndexQueue,
 } from "./queue-service";
 import { startWebScraperPipeline } from "../main/runWebScraper";
 import { callWebhook } from "./webhook";
@@ -61,6 +62,7 @@ import { supabase_service } from "../services/supabase";
 import { normalizeUrl, normalizeUrlOnlyHostname } from "../lib/canonical-url";
 import { saveExtract, updateExtract } from "../lib/extract/extract-redis";
 import { billTeam } from "./billing/credit_billing";
+import { saveCrawlMap } from "./indexing/crawl-maps-index";
 
 configDotenv();
 
@@ -91,7 +93,9 @@ const runningJobs: Set<string> = new Set();
 async function finishCrawlIfNeeded(job: Job & { id: string }, sc: StoredCrawl) {
   if (await finishCrawl(job.data.crawl_id)) {
     (async () => {
-      const originUrl = sc.originUrl ? normalizeUrlOnlyHostname(sc.originUrl) : undefined;
+      const originUrl = sc.originUrl
+        ? normalizeUrlOnlyHostname(sc.originUrl)
+        : undefined;
       // Get all visited unique URLs from Redis
       const visitedUrls = await redisConnection.smembers(
         "crawl:" + job.data.crawl_id + ":visited_unique",
@@ -102,58 +106,17 @@ async function finishCrawlIfNeeded(job: Job & { id: string }, sc: StoredCrawl) {
         job.data.crawlerOptions !== null &&
         originUrl
       ) {
-        // Fire and forget the upload to Supabase
-        try {
-          // Standardize URLs to canonical form (https, no www)
-          const standardizedUrls = [
-            ...new Set(
-              visitedUrls.map((url) => {
-                return normalizeUrl(url);
-              }),
-            ),
-          ];
-          // First check if entry exists for this origin URL
-          const { data: existingMap } = await supabase_service
-            .from("crawl_maps")
-            .select("urls")
-            .eq("origin_url", originUrl)
-            .single();
-
-          if (existingMap) {
-            // Merge URLs, removing duplicates
-            const mergedUrls = [
-              ...new Set([...existingMap.urls, ...standardizedUrls]),
-            ];
-
-            const { error } = await supabase_service
-              .from("crawl_maps")
-              .update({
-                urls: mergedUrls,
-                num_urls: mergedUrls.length,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("origin_url", originUrl);
-
-            if (error) {
-              _logger.error("Failed to update crawl map", { error });
-            }
-          } else {
-            // Insert new entry if none exists
-            const { error } = await supabase_service.from("crawl_maps").insert({
-              origin_url: originUrl,
-              urls: standardizedUrls,
-              num_urls: standardizedUrls.length,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-
-            if (error) {
-              _logger.error("Failed to save crawl map", { error });
-            }
-          }
-        } catch (error) {
-          _logger.error("Error saving crawl map", { error });
-        }
+        // Queue the indexing job instead of doing it directly
+        await getIndexQueue().add(
+          job.data.crawl_id,
+          {
+            originUrl,
+            visitedUrls,
+          },
+          {
+            priority: 10,
+          },
+        );
       }
     })();
 
@@ -271,7 +234,10 @@ const processJobInternal = async (token: string, job: Job & { id: string }) => {
   });
 
   const extendLockInterval = setInterval(async () => {
-    logger.info(`🐂 Worker extending lock on job ${job.id}`);
+    logger.info(`🐂 Worker extending lock on job ${job.id}`, {
+      extendInterval: jobLockExtendInterval,
+      extensionTime: jobLockExtensionTime,
+    });
     await job.extendLock(token, jobLockExtensionTime);
   }, jobLockExtendInterval);
 
@@ -354,11 +320,14 @@ const processExtractJobInternal = async (
       return result;
     } else {
       // throw new Error(result.error || "Unknown error during extraction");
-      
+
       await job.moveToCompleted(result, token, false);
       await updateExtract(job.data.extractId, {
         status: "failed",
-        error: result.error ?? "Unknown error, please contact help@firecrawl.com. Extract id: " + job.data.extractId,
+        error:
+          result.error ??
+          "Unknown error, please contact help@firecrawl.com. Extract id: " +
+            job.data.extractId,
       });
 
       return result;
@@ -372,8 +341,12 @@ const processExtractJobInternal = async (
       },
     });
 
-    // Move job to failed state in Redis
-    await job.moveToFailed(error, token, false);
+    try {
+      // Move job to failed state in Redis
+      await job.moveToFailed(error, token, false);
+    } catch (e) {
+      logger.log("Failed to move job to failed state in Redis", { error });
+    }
 
     await updateExtract(job.data.extractId, {
       status: "failed",
@@ -383,7 +356,14 @@ const processExtractJobInternal = async (
         "Unknown error, please contact help@firecrawl.com. Extract id: " +
           job.data.extractId,
     });
-    return { success: false, error: error.error ?? error ?? "Unknown error, please contact help@firecrawl.com. Extract id: " + job.data.extractId };
+    return {
+      success: false,
+      error:
+        error.error ??
+        error ??
+        "Unknown error, please contact help@firecrawl.com. Extract id: " +
+          job.data.extractId,
+    };
     // throw error;
   } finally {
     clearInterval(extendLockInterval);
@@ -904,7 +884,7 @@ async function processJob(job: Job & { id: string }, token: string) {
           );
 
           const links = crawler.filterLinks(
-            crawler.extractLinksFromHTML(
+            await crawler.extractLinksFromHTML(
               rawHtml ?? "",
               doc.metadata?.url ?? doc.metadata?.sourceURL ?? sc.originUrl!,
             ),
@@ -984,13 +964,15 @@ async function processJob(job: Job & { id: string }, token: string) {
       }
 
       if (job.data.team_id !== process.env.BACKGROUND_INDEX_TEAM_ID!) {
-        billTeam(job.data.team_id, undefined, creditsToBeBilled, logger).catch((error) => {
-          logger.error(
-            `Failed to bill team ${job.data.team_id} for ${creditsToBeBilled} credits`,
-            { error },
-          );
-          // Optionally, you could notify an admin or add to a retry queue here
-        });
+        billTeam(job.data.team_id, undefined, creditsToBeBilled, logger).catch(
+          (error) => {
+            logger.error(
+              `Failed to bill team ${job.data.team_id} for ${creditsToBeBilled} credits`,
+              { error },
+            );
+            // Optionally, you could notify an admin or add to a retry queue here
+          },
+        );
       }
     }
 
@@ -1009,11 +991,12 @@ async function processJob(job: Job & { id: string }, token: string) {
 
       await finishCrawlIfNeeded(job, sc);
     }
-    
+
     const isEarlyTimeout =
       error instanceof Error && error.message === "timeout";
     const isCancelled =
-      error instanceof Error && error.message === "Parent crawl/batch scrape was cancelled";
+      error instanceof Error &&
+      error.message === "Parent crawl/batch scrape was cancelled";
 
     if (isEarlyTimeout) {
       logger.error(`🐂 Job timed out ${job.id}`);

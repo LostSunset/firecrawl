@@ -51,6 +51,11 @@ class FirecrawlApp:
         schema_: Optional[Any] = pydantic.Field(None, alias='schema')
         system_prompt: Optional[str] = None
         allow_external_links: Optional[bool] = False
+        enable_web_search: Optional[bool] = False
+        # Just for backwards compatibility
+        enableWebSearch: Optional[bool] = False
+
+
 
     class ExtractResponse(pydantic.BaseModel):
         """
@@ -624,7 +629,8 @@ class FirecrawlApp:
         jsonData = {'urls': urls, **params}
         request_data = {
             **jsonData,
-            'allowExternalLinks': params.get('allow_external_links', False),
+            'allowExternalLinks': params.get('allow_external_links', params.get('allowExternalLinks', False)),
+            'enableWebSearch': params.get('enable_web_search', params.get('enableWebSearch', False)),
             'schema': schema,
             'origin': 'api-sdk'
         }

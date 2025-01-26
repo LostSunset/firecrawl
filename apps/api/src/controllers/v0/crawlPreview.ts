@@ -7,6 +7,7 @@ import { logger } from "../../../src/lib/logger";
 import {
   addCrawlJob,
   crawlToCrawler,
+  finishCrawlKickoff,
   lockURL,
   saveCrawl,
   StoredCrawl,
@@ -21,7 +22,10 @@ export async function crawlPreviewController(req: Request, res: Response) {
   try {
     const auth = await authenticateUser(req, res, RateLimiterMode.Preview);
 
-    const team_id = "preview";
+    const incomingIP = (req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress) as string;
+    const iptoken = incomingIP + "this_is_just_a_preview_token";
+    const team_id = `preview_${iptoken}`;
 
     if (!auth.success) {
       return res.status(auth.status).json({ error: auth.error });
@@ -111,6 +115,8 @@ export async function crawlPreviewController(req: Request, res: Response) {
     await saveCrawl(id, sc);
 
     const crawler = crawlToCrawler(id, sc);
+
+    await finishCrawlKickoff(id);
 
     const sitemap = sc.crawlerOptions?.ignoreSitemap
       ? 0

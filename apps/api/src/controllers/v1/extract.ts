@@ -59,7 +59,8 @@ export async function extractController(
 
   if (
     (await getTeamIdSyncB(req.auth.team_id)) &&
-    req.body.origin !== "api-sdk"
+    req.body.origin !== "api-sdk" &&
+    req.body.origin !== "website"
   ) {
     return await oldExtract(req, res, extractId);
   }
@@ -71,6 +72,7 @@ export async function extractController(
     createdAt: Date.now(),
     status: "processing",
     showSteps: req.body.__experimental_streamSteps,
+    showLLMUsage: req.body.__experimental_llmUsage,
   });
 
   if (Sentry.isInitialized()) {
@@ -93,7 +95,7 @@ export async function extractController(
             baggage: Sentry.spanToBaggageHeader(span),
             size,
           },
-        });
+        }, { jobId: extractId });
       },
     );
   } else {
