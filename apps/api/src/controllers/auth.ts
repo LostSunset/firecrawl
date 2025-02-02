@@ -1,5 +1,5 @@
 import { parseApi } from "../lib/parseApi";
-import { getRateLimiter } from "../services/rate-limiter";
+import { getRateLimiter, isTestSuiteToken } from "../services/rate-limiter";
 import {
   AuthResponse,
   NotificationType,
@@ -94,8 +94,9 @@ export async function getACUC(
     let retries = 0;
     const maxRetries = 5;
 
+    let isExtract = (mode === RateLimiterMode.Extract || mode === RateLimiterMode.ExtractStatus)
     let rpcName =
-      mode === RateLimiterMode.Extract || mode === RateLimiterMode.ExtractStatus
+      isExtract
         ? "auth_credit_usage_chunk_extract"
         : "auth_credit_usage_chunk_test_22_credit_pack_n_extract";
     while (retries < maxRetries) {
@@ -132,7 +133,7 @@ export async function getACUC(
       setCachedACUC(api_key, chunk);
     }
 
-    return chunk;
+    return chunk ? { ...chunk, is_extract: isExtract } : null;
   } else {
     return null;
   }
@@ -343,6 +344,16 @@ export async function supaAuthenticateUser(
     // }
 
     // return { success: false, error: "Unauthorized: Invalid token", status: 401 };
+  }
+
+  if (token && isTestSuiteToken(token)) {
+    return {
+      success: true,
+      team_id: teamId ?? undefined,
+      // Now we have a test suite plan
+      plan: "testSuite",
+      chunk
+    };
   }
 
   return {

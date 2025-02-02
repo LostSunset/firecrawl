@@ -17,7 +17,8 @@ pub unsafe extern "C" fn extract_links(html: *const libc::c_char) -> *mut i8 {
 
     let mut out: Vec<String> = Vec::new();
 
-    for anchor in document.select("a[href]").unwrap() {
+    let anchors: Vec<_> = document.select("a[href]").unwrap().collect();
+    for anchor in anchors {
         let mut href = anchor.attributes.borrow().get("href").unwrap().to_string();
         
         if href.starts_with("http:/") && !href.starts_with("http://") {
@@ -128,7 +129,9 @@ pub unsafe extern "C" fn extract_metadata(html: *const libc::c_char) -> *mut i8 
                 if let Some(v) = out.get(name) {
                     match v {
                         Value::String(_) => {
-                            out.insert(name.to_string(), Value::Array(vec! [v.clone(), Value::String(content.to_string())]));
+                            if name != "title" { // preserve title tag in metadata
+                                out.insert(name.to_string(), Value::Array(vec! [v.clone(), Value::String(content.to_string())]));
+                            }
                         },
                         Value::Array(_) => {
                             match out.get_mut(name) {

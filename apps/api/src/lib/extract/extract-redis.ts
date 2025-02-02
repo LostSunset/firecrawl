@@ -31,7 +31,11 @@ export type StoredExtract = {
   showSteps?: boolean;
   steps?: ExtractedStep[];
   showLLMUsage?: boolean;
+  showSources?: boolean;
   llmUsage?: number;
+  sources?: {
+    [key: string]: string[];
+  };
 };
 
 // Reduce TTL to 6 hours instead of 24

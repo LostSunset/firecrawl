@@ -34,7 +34,7 @@ export const url = z.preprocess(
     .url()
     .regex(/^https?:\/\//, "URL uses unsupported protocol")
     .refine(
-      (x) => /\.[a-z]{2,}(:\d+)?([\/?#]|$)/i.test(x),
+      (x) => /\.[a-zA-Z\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{2,}(:\d+)?([\/?#]|$)/i.test(x),
       "URL must have a valid top-level domain or be a valid path",
     )
     .refine((x) => {
@@ -57,10 +57,11 @@ export const extractOptions = z
     schema: z.any().optional(),
     systemPrompt: z
       .string()
+      .max(10000)
       .default(
         "Based on the information on the page, extract all the information from the schema in JSON format. Try to extract all the fields even those that might not be marked as required.",
       ),
-    prompt: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
   })
   .strict(strictMessage);
 
@@ -139,7 +140,7 @@ export const scrapeOptions = z
     excludeTags: z.string().array().optional(),
     onlyMainContent: z.boolean().default(true),
     timeout: z.number().int().positive().finite().safe().optional(),
-    waitFor: z.number().int().nonnegative().finite().safe().default(0),
+    waitFor: z.number().int().nonnegative().finite().safe().max(30000).default(0),
     // Deprecate this to jsonOptions
     extract: extractOptions.optional(),
     // New
@@ -154,13 +155,13 @@ export const scrapeOptions = z
           .string()
           .optional()
           .refine(
-            (val) => !val || Object.keys(countries).includes(val.toUpperCase()),
+            (val) => !val || Object.keys(countries).includes(val.toUpperCase()) || val === "US-generic",
             {
               message:
                 "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
             },
           )
-          .transform((val) => (val ? val.toUpperCase() : "US")),
+          .transform((val) => (val ? val.toUpperCase() : "US-generic")),
         languages: z.string().array().optional(),
       })
       .optional(),
@@ -178,7 +179,7 @@ export const scrapeOptions = z
                 "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
             },
           )
-          .transform((val) => (val ? val.toUpperCase() : "US")),
+          .transform((val) => (val ? val.toUpperCase() : "US-generic")),
         languages: z.string().array().optional(),
       })
       .optional(),
@@ -186,6 +187,7 @@ export const scrapeOptions = z
     removeBase64Images: z.boolean().default(true),
     fastMode: z.boolean().default(false),
     useMock: z.string().optional(),
+    blockAds: z.boolean().default(true),
   })
   .strict(strictMessage);
 
@@ -200,8 +202,8 @@ export const extractV1Options = z
     urls: url
       .array()
       .max(10, "Maximum of 10 URLs allowed per request while in beta."),
-    prompt: z.string().optional(),
-    systemPrompt: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    systemPrompt: z.string().max(10000).optional(),
     schema: z
       .any()
       .optional()
@@ -226,9 +228,12 @@ export const extractV1Options = z
     enableWebSearch: z.boolean().default(false),
     origin: z.string().optional().default("api"),
     urlTrace: z.boolean().default(false),
+    timeout: z.number().int().positive().finite().safe().default(60000),
     __experimental_streamSteps: z.boolean().default(false),
     __experimental_llmUsage: z.boolean().default(false),
-    timeout: z.number().int().positive().finite().safe().default(60000),
+    __experimental_showSources: z.boolean().default(false),
+    __experimental_cacheKey: z.string().optional(),
+    __experimental_cacheMode: z.enum(["direct", "save", "load"]).default("direct").optional()
   })
   .strict(strictMessage)
   .transform((obj) => ({
@@ -314,6 +319,7 @@ export const webhookSchema = z.preprocess(
       url: z.string().url(),
       headers: z.record(z.string(), z.string()).default({}),
       metadata: z.record(z.string(), z.string()).default({}),
+      events: z.array(z.enum(["completed", "failed", "page", "started"])).default(["completed", "failed", "page", "started"]),
     })
     .strict(strictMessage),
 );
@@ -429,6 +435,7 @@ export const mapRequestSchema = crawlerOptions
     ignoreSitemap: z.boolean().default(false),
     sitemapOnly: z.boolean().default(false),
     limit: z.number().min(1).max(5000).default(5000),
+    timeout: z.number().positive().finite().optional(),
   })
   .strict(strictMessage);
 
@@ -438,6 +445,7 @@ export const mapRequestSchema = crawlerOptions
 // };
 
 export type MapRequest = z.infer<typeof mapRequestSchema>;
+export type MapRequestInput = z.input<typeof mapRequestSchema>;
 
 export type Document = {
   title?: string;
@@ -537,6 +545,7 @@ export interface URLTrace {
   };
   relevanceScore?: number;
   usedInCompletion?: boolean;
+  extractedFields?: string[];
 }
 
 export interface ExtractResponse {
@@ -547,6 +556,9 @@ export interface ExtractResponse {
   id?: string;
   warning?: string;
   urlTrace?: URLTrace[];
+  sources?: {
+    [key: string]: string[];
+  };
 }
 
 export interface ExtractResponseRequestTest {
@@ -593,6 +605,7 @@ export type ConcurrencyCheckResponse =
   | {
       success: true;
       concurrency: number;
+      maxConcurrency: number;
     };
 
 export type CrawlStatusResponse =
@@ -644,6 +657,7 @@ export type AuthCreditUsageChunk = {
   remaining_credits: number;
   sub_user_id: string | null;
   total_credits_sum: number;
+  is_extract?: boolean;
 };
 
 export interface RequestWithMaybeACUC<
