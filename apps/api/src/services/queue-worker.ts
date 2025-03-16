@@ -567,7 +567,8 @@ const workerFun = async (
     const token = uuidv4();
     const canAcceptConnection = await monitor.acceptConnection();
     if (!canAcceptConnection) {
-      console.log("Cant accept connection");
+      console.log("Can't accept connection due to RAM/CPU load");
+      logger.info("Can't accept connection due to RAM/CPU load");
       cantAcceptConnectionCount++;
 
       if (cantAcceptConnectionCount >= 25) {
@@ -1044,6 +1045,7 @@ async function processJob(job: Job & { id: string }, token: string) {
             job.data.crawl_id,
             sc,
             doc.metadata.url ?? doc.metadata.sourceURL ?? sc.originUrl!,
+            job.data.crawlerOptions,
           );
 
           const links = crawler.filterLinks(
@@ -1088,6 +1090,10 @@ async function processJob(job: Job & { id: string }, token: string) {
                   team_id: sc.team_id,
                   scrapeOptions: scrapeOptions.parse(sc.scrapeOptions),
                   internalOptions: sc.internalOptions,
+                  crawlerOptions: {
+                    ...sc.crawlerOptions,
+                    currentDiscoveryDepth: (job.data.crawlerOptions?.currentDiscoveryDepth ?? 0) + 1,
+                  },
                   plan: job.data.plan,
                   origin: job.data.origin,
                   crawl_id: job.data.crawl_id,
