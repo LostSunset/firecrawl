@@ -412,6 +412,7 @@ const processDeepResearchJobInternal = async (
       timeLimit: job.data.request.timeLimit,
       subId: job.data.subId,
       maxUrls: job.data.request.maxUrls,
+      analysisPrompt: job.data.request.analysisPrompt,
     });  
     
     if(result.success) {
@@ -921,6 +922,10 @@ async function processJob(job: Job & { id: string }, token: string) {
 
     if (!job.data.scrapeOptions.formats.includes("rawHtml")) {
       delete doc.rawHtml;
+    }
+
+    if (job.data.concurrencyLimited) {
+      doc.warning = "This scrape job was throttled at your current concurrency limit. If you'd like to scrape faster, you can upgrade your plan." + (doc.warning ? " " + doc.warning : "");
     }
 
     const data = {
