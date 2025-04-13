@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";
 import { protocolIncluded, checkUrl } from "../../lib/validateUrl";
-import { PlanType } from "../../types";
 import { countries } from "../../lib/validate-country";
 import {
   ExtractorOptions,
@@ -21,7 +20,8 @@ export type Format =
   | "screenshot"
   | "screenshot@fullPage"
   | "extract"
-  | "compare";
+  | "json"
+  | "changeTracking";
 
 export const url = z.preprocess(
   (x) => {
@@ -166,7 +166,7 @@ const baseScrapeOptions = z
         "screenshot@fullPage",
         "extract",
         "json",
-        "compare",
+        "changeTracking",
       ])
       .array()
       .optional()
@@ -176,8 +176,8 @@ const baseScrapeOptions = z
         "You may only specify either screenshot or screenshot@fullPage",
       )
       .refine(
-        (x) => !x.includes("compare") || x.includes("markdown"),
-        "The compare format requires the markdown format to be specified as well",
+        (x) => !x.includes("changeTracking") || x.includes("markdown"),
+        "The changeTracking format requires the markdown format to be specified as well",
       ),
     headers: z.record(z.string(), z.string()).optional(),
     includeTags: z.string().array().optional(),
@@ -196,6 +196,13 @@ const baseScrapeOptions = z
     extract: extractOptions.optional(),
     // New
     jsonOptions: extractOptions.optional(),
+    changeTrackingOptions: z
+      .object({
+        prompt: z.string().optional(),
+        schema: z.any().optional(),
+        modes: z.enum(["json", "git-diff"]).array().optional().default([]),
+      })
+      .optional(),
     mobile: z.boolean().default(false),
     parsePDF: z.boolean().default(true),
     actions: actionsSchema.optional(),
@@ -552,10 +559,31 @@ export type Document = {
       value: unknown
     }[];
   };
-  compare?: {
+  changeTracking?: {
     previousScrapeAt: string | null;
     changeStatus: "new" | "same" | "changed" | "removed";
     visibility: "visible" | "hidden";
+    diff?: {
+      text: string;
+      json: {
+        files: Array<{
+          from: string | null;
+          to: string | null;
+          chunks: Array<{
+            content: string;
+            changes: Array<{
+              type: string;
+              normal?: boolean;
+              ln?: number;
+              ln1?: number;
+              ln2?: number;
+              content: string;
+            }>;
+          }>;
+        }>;
+      };
+    };
+    json?: any;
   }
   metadata: {
     title?: string;
@@ -729,7 +757,6 @@ export type CrawlErrorsResponse =
 
 type AuthObject = {
   team_id: string;
-  plan: PlanType | undefined;
 };
 
 type Account = {
@@ -742,17 +769,35 @@ export type AuthCreditUsageChunk = {
   sub_id: string | null;
   sub_current_period_start: string | null;
   sub_current_period_end: string | null;
+  sub_user_id: string | null;
   price_id: string | null;
   price_credits: number; // credit limit with assoicated price, or free_credits (500) if free plan
   credits_used: number;
   coupon_credits: number; // do not rely on this number to be up to date after calling a billTeam
-  coupons: any[];
   adjusted_credits_used: number; // credits this period minus coupons used
   remaining_credits: number;
-  sub_user_id: string | null;
   total_credits_sum: number;
+  plan_priority: {
+    bucketLimit: number;
+    planModifier: number;
+  };
+  rate_limits: {
+    crawl: number;
+    scrape: number;
+    search: number;
+    map: number;
+    extract: number;
+    preview: number;
+    crawlStatus: number;
+    extractStatus: number;
+  };
+  concurrency: number;
+
+  // appended on JS-side
   is_extract?: boolean;
 };
+
+export type AuthCreditUsageChunkFromTeam = Omit<AuthCreditUsageChunk, "api_key">;
 
 export interface RequestWithMaybeACUC<
   ReqParams = {},
@@ -969,7 +1014,7 @@ export const searchRequestSchema = z
       .positive()
       .finite()
       .safe()
-      .max(20)
+      .max(50)
       .optional()
       .default(5),
     tbs: z.string().optional(),
