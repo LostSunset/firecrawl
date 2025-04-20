@@ -1,5 +1,5 @@
 import { parseApi } from "../lib/parseApi";
-import { getRateLimiter, isTestSuiteToken } from "../services/rate-limiter";
+import { getRateLimiter } from "../services/rate-limiter";
 import {
   AuthResponse,
   NotificationType,
@@ -64,13 +64,47 @@ export async function setCachedACUC(
         throw signal.error;
       }
 
-      // Cache for 1 hour. - mogery
-      await setValue(cacheKeyACUC, JSON.stringify(acuc), 3600, true);
+      // Cache for 10 minutes. - mogery
+      await setValue(cacheKeyACUC, JSON.stringify(acuc), 600, true);
     });
   } catch (error) {
     logger.error(`Error updating cached ACUC ${cacheKeyACUC}: ${error}`);
   }
 }
+
+const mockPreviewACUC: (team_id: string, is_extract: boolean) => AuthCreditUsageChunk = (team_id, is_extract) => ({
+  api_key: "preview",
+  team_id,
+  sub_id: null,
+  sub_current_period_start: null,
+  sub_current_period_end: null,
+  sub_user_id: null,
+  price_id: null,
+  rate_limits: {
+    crawl: 2,
+    scrape: 10,
+    extract: 10,
+    search: 5,
+    map: 5,
+    preview: 5,
+    crawlStatus: 500,
+    extractStatus: 500,
+    extractAgentPreview: 1,
+    scrapeAgentPreview: 5,
+  },
+  price_credits: 99999999,
+  credits_used: 0,
+  coupon_credits: 99999999,
+  adjusted_credits_used: 0,
+  remaining_credits: 99999999,
+  total_credits_sum: 99999999,
+  plan_priority: {
+    bucketLimit: 25,
+    planModifier: 0.1,
+  },
+  concurrency: is_extract ? 200 : 2,
+  is_extract,
+});
 
 const mockACUC: () => AuthCreditUsageChunk = () => ({
   api_key: "bypass",
@@ -89,6 +123,8 @@ const mockACUC: () => AuthCreditUsageChunk = () => ({
     preview: 99999999,
     crawlStatus: 99999999,
     extractStatus: 99999999,
+    extractAgentPreview: 99999999,
+    scrapeAgentPreview: 99999999,
   },
   price_credits: 99999999,
   credits_used: 0,
@@ -112,7 +148,14 @@ export async function getACUC(
 ): Promise<AuthCreditUsageChunk | null> {
   let isExtract =
       mode === RateLimiterMode.Extract ||
-      mode === RateLimiterMode.ExtractStatus;
+      mode === RateLimiterMode.ExtractStatus ||
+      mode === RateLimiterMode.ExtractAgentPreview;
+
+  if (api_key === process.env.PREVIEW_TOKEN) {
+    const acuc = mockPreviewACUC(api_key, isExtract);
+    acuc.is_extract = isExtract;
+    return acuc;
+  }
   
   if (process.env.USE_DB_AUTHENTICATION !== "true") {
     const acuc = mockACUC();
@@ -122,14 +165,14 @@ export async function getACUC(
 
   const cacheKeyACUC = `acuc_${api_key}_${isExtract ? "extract" : "scrape"}`;
 
-  // if (useCache) {
-  //   const cachedACUC = await getValue(cacheKeyACUC);
-  //   if (cachedACUC !== null) {
-  //     return JSON.parse(cachedACUC);
-  //   }
-  // }
+  if (useCache) {
+    const cachedACUC = await getValue(cacheKeyACUC);
+    if (cachedACUC !== null) {
+      return JSON.parse(cachedACUC);
+    }
+  }
 
-  // if (!cacheOnly) {
+  if (!cacheOnly) {
     let data;
     let error;
     let retries = 0;
@@ -138,7 +181,7 @@ export async function getACUC(
       const client =
         Math.random() > (2/3) ? supabase_rr_service : supabase_service;
       ({ data, error } = await client.rpc(
-        "auth_credit_usage_chunk_28",
+        "auth_credit_usage_chunk_30",
         { input_key: api_key, i_is_extract: isExtract, tally_untallied_credits: true },
         { get: true },
       ));
@@ -167,14 +210,14 @@ export async function getACUC(
       data.length === 0 ? null : data[0].team_id === null ? null : data[0];
 
     // NOTE: Should we cache null chunks? - mogery
-    // if (chunk !== null && useCache) {
-    //   setCachedACUC(api_key, isExtract, chunk);
-    // }
+    if (chunk !== null && useCache) {
+      setCachedACUC(api_key, isExtract, chunk);
+    }
 
     return chunk ? { ...chunk, is_extract: isExtract } : null;
-  // } else {
-  //   return null;
-  // }
+  } else {
+    return null;
+  }
 }
 
 export async function setCachedACUCTeam(
@@ -206,8 +249,8 @@ export async function setCachedACUCTeam(
         throw signal.error;
       }
 
-      // Cache for 1 hour. - mogery
-      await setValue(cacheKeyACUC, JSON.stringify(acuc), 3600, true);
+      // Cache for 10 minutes. - mogery
+      await setValue(cacheKeyACUC, JSON.stringify(acuc), 600, true);
     });
   } catch (error) {
     logger.error(`Error updating cached ACUC ${cacheKeyACUC}: ${error}`);
@@ -222,7 +265,13 @@ export async function getACUCTeam(
 ): Promise<AuthCreditUsageChunkFromTeam | null> {
   let isExtract =
       mode === RateLimiterMode.Extract ||
-      mode === RateLimiterMode.ExtractStatus;
+      mode === RateLimiterMode.ExtractStatus ||
+      mode === RateLimiterMode.ExtractAgentPreview;
+
+  if (team_id.startsWith("preview")) {
+    const acuc = mockPreviewACUC(team_id, isExtract);
+    return acuc;
+  }
   
   if (process.env.USE_DB_AUTHENTICATION !== "true") {
     const acuc = mockACUC();
@@ -232,14 +281,14 @@ export async function getACUCTeam(
 
   const cacheKeyACUC = `acuc_team_${team_id}_${isExtract ? "extract" : "scrape"}`;
 
-  // if (useCache) {
-  //   const cachedACUC = await getValue(cacheKeyACUC);
-  //   if (cachedACUC !== null) {
-  //     return JSON.parse(cachedACUC);
-  //   }
-  // }
+  if (useCache) {
+    const cachedACUC = await getValue(cacheKeyACUC);
+    if (cachedACUC !== null) {
+      return JSON.parse(cachedACUC);
+    }
+  }
 
-  // if (!cacheOnly) {
+  if (!cacheOnly) {
     let data;
     let error;
     let retries = 0;
@@ -249,7 +298,7 @@ export async function getACUCTeam(
       const client =
         Math.random() > (2/3) ? supabase_rr_service : supabase_service;
       ({ data, error } = await client.rpc(
-        "auth_credit_usage_chunk_28_from_team",
+        "auth_credit_usage_chunk_30_from_team",
         { input_team: team_id, i_is_extract: isExtract, tally_untallied_credits: true },
         { get: true },
       ));
@@ -278,14 +327,14 @@ export async function getACUCTeam(
       data.length === 0 ? null : data[0].team_id === null ? null : data[0];
 
     // NOTE: Should we cache null chunks? - mogery
-    // if (chunk !== null && useCache) {
-    //   setCachedACUC(api_key, chunk);
-    // }
+    if (chunk !== null && useCache) {
+      setCachedACUCTeam(team_id, isExtract, chunk);
+    }
 
     return chunk ? { ...chunk, is_extract: isExtract } : null;
-  // } else {
-  //   return null;
-  // }
+  } else {
+    return null;
+  }
 }
 
 export async function clearACUC(api_key: string): Promise<void> {
@@ -350,7 +399,7 @@ export async function supaAuthenticateUser(
     };
   }
 
-  const incomingIP = (req.headers["x-forwarded-for"] ||
+  const incomingIP = (req.headers["x-preview-ip"] || req.headers["x-forwarded-for"] ||
     req.socket.remoteAddress) as string;
   const iptoken = incomingIP + token;
 
