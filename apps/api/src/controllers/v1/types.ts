@@ -1142,7 +1142,7 @@ export const searchRequestSchema = z
       .positive()
       .finite()
       .safe()
-      .max(50)
+      .max(100)
       .optional()
       .default(5),
     tbs: z.string().optional(),
@@ -1211,6 +1211,10 @@ export const generateLLMsTextRequestSchema = z.object({
     .boolean()
     .default(false)
     .describe("Whether to show the full LLMs-full.txt in the response"),
+  cache: z
+    .boolean()
+    .default(true)
+    .describe("Whether to use cached content if available"),
   __experimental_stream: z.boolean().optional(),
 });
 
