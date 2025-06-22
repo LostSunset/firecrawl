@@ -209,6 +209,7 @@ export interface CrawlParams {
   maxDiscoveryDepth?: number;
   limit?: number;
   allowBackwardLinks?: boolean;
+  crawlEntireDomain?: boolean;
   allowExternalLinks?: boolean;
   ignoreSitemap?: boolean;
   scrapeOptions?: CrawlScrapeOptions;
@@ -226,6 +227,7 @@ export interface CrawlParams {
    * If not provided, the crawler may use the robots.txt crawl delay if available.
    */
   delay?: number;
+  maxConcurrency?: number;
 }
 
 /**
@@ -1012,9 +1014,10 @@ export default class FirecrawlApp {
     idempotencyKey?: string,
     webhook?: CrawlParams["webhook"],
     ignoreInvalidURLs?: boolean,
+    maxConcurrency?: number,
   ): Promise<BatchScrapeStatusResponse | ErrorResponse> {
     const headers = this.prepareHeaders(idempotencyKey);
-    let jsonData: any = { urls, webhook, ignoreInvalidURLs, ...params, origin: `js-sdk@${this.version}` };
+    let jsonData: any = { urls, webhook, ignoreInvalidURLs, maxConcurrency, ...params, origin: `js-sdk@${this.version}` };
     if (jsonData?.extract?.schema) {
       let schema = jsonData.extract.schema;
 
