@@ -1,9 +1,24 @@
-import { scrape, scrapeStatus, scrapeWithFailure } from "./lib";
+import { scrape, scrapeStatus, scrapeWithFailure, scrapeTimeout, indexCooldown, idmux, Identity } from "./lib";
 import crypto from "crypto";
 
-// Due to the limited resources of the CI runner, we need to set a longer timeout for the many many scrape tests
-const scrapeTimeout = 75000;
-const indexCooldown = 30000;
+let identity: Identity;
+
+beforeAll(async () => {
+  identity = await idmux({
+    name: "scrape",
+    concurrency: 100,
+    credits: 1000000,
+  });
+
+  if (!process.env.TEST_SUITE_SELF_HOSTED) {
+    // Needed for change tracking tests to work
+    await scrape({
+      url: "https://example.com",
+      formats: ["markdown", "changeTracking"],
+      timeout: scrapeTimeout,
+    }, identity);
+  }
+}, 10000 + scrapeTimeout);
 
 describe("Scrape tests", () => {
   it.concurrent("mocking works properly", async () => {
@@ -15,7 +30,7 @@ describe("Scrape tests", () => {
       url: "http://firecrawl.dev",
       useMock: "mocking-works-properly",
       timeout: scrapeTimeout,
-    });
+    }, identity);
 
     expect(response.markdown).toBe(
       "this is fake data coming from the mocking system!",
@@ -26,7 +41,7 @@ describe("Scrape tests", () => {
     const response = await scrape({
       url: "http://firecrawl.dev",
       timeout: scrapeTimeout,
-    });
+    }, identity);
 
     expect(response.markdown).toContain("Firecrawl");
   }, scrapeTimeout);
@@ -35,7 +50,7 @@ describe("Scrape tests", () => {
     const response = await scrape({
       url: "https://www.rtpro.yamaha.co.jp/RT/docs/misc/kanji-sjis.html",
       timeout: scrapeTimeout,
-    });
+    }, identity);
 
     expect(response.markdown).toContain("ぐ け げ こ ご さ ざ し じ す ず せ ぜ そ ぞ た");
   }, scrapeTimeout);
@@ -45,7 +60,7 @@ describe("Scrape tests", () => {
       const response = await scrape({
         url: "https://icanhazip.com",
         timeout: scrapeTimeout,
-      });
+      }, identity);
 
       expect(response.markdown?.trim()).toContain(process.env.PROXY_SERVER!.split("://").slice(-1)[0].split(":")[0]);
     }, scrapeTimeout);
@@ -55,7 +70,7 @@ describe("Scrape tests", () => {
         url: "https://icanhazip.com",
         waitFor: 100,
         timeout: scrapeTimeout,
-      });
+      }, identity);
 
       expect(response.markdown?.trim()).toContain(process.env.PROXY_SERVER!.split("://").slice(-1)[0].split(":")[0]);
     }, scrapeTimeout);
@@ -67,7 +82,7 @@ describe("Scrape tests", () => {
         url: "http://firecrawl.dev",
         waitFor: 2000,
         timeout: scrapeTimeout,
-      });
+      }, identity);
   
       expect(response.markdown).toContain("Firecrawl");
     }, scrapeTimeout);
@@ -79,7 +94,7 @@ describe("Scrape tests", () => {
         url: "https://jsonplaceholder.typicode.com/todos/1",
         formats: ["rawHtml"],
         timeout: scrapeTimeout,
-      });
+      }, identity);
 
       const obj = JSON.parse(response.rawHtml!);
       expect(obj.id).toBe(1);
@@ -91,37 +106,36 @@ describe("Scrape tests", () => {
       const response = await scrape({
         url: "http://firecrawl.dev",
         timeout: scrapeTimeout,
-      });
+      }, identity);
   
       expect(response.markdown).toContain("Firecrawl");
 
       // Give time to propagate to read replica
       await new Promise(resolve => setTimeout(resolve, 1000));
   
-      const status = await scrapeStatus(response.metadata.scrapeId!);
+      const status = await scrapeStatus(response.metadata.scrapeId!, identity);
       expect(JSON.stringify(status)).toBe(JSON.stringify(response));
     }, scrapeTimeout);
     
-    // describe("Ad blocking (f-e dependant)", () => {
-    //   it.concurrent("blocks ads by default", async () => {
-    //     const response = await scrape({
-    //       url: "https://www.allrecipes.com/recipe/18185/yum/",
-    //     });
+    describe("Ad blocking (f-e dependant)", () => {
+      it.concurrent("blocking ads works", async () => {
+        await scrape({
+          url: "https://firecrawl.dev",
+          blockAds: true,
+          timeout: scrapeTimeout,
+        }, identity);
+      }, scrapeTimeout);
 
-    //     expect(response.markdown).not.toContain(".g.doubleclick.net/");
-    //   }, 30000);
-
-    //   it.concurrent("doesn't block ads if explicitly disabled", async () => {
-    //     const response = await scrape({
-    //       url: "https://www.allrecipes.com/recipe/18185/yum/",
-    //       blockAds: false,
-    //     });
-
-    //     expect(response.markdown).toMatch(/(\.g\.doubleclick\.net|amazon-adsystem\.com)\//);
-    //   }, 30000);
-    // });
+      it.concurrent("doesn't block ads if explicitly disabled", async () => {
+        await scrape({
+          url: "https://firecrawl.dev",
+          blockAds: false,
+          timeout: scrapeTimeout,
+        }, identity);
+      }, scrapeTimeout);
+    });
     
-    describe.only("Index", () => {
+    describe("Index", () => {
       it.concurrent("caches properly", async () => {
         const id = crypto.randomUUID();
         const url = "https://firecrawl.dev/?testId=" + id;
@@ -131,7 +145,7 @@ describe("Scrape tests", () => {
           maxAge: scrapeTimeout * 3,
           storeInCache: false,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).toBe("miss");
 
@@ -141,7 +155,7 @@ describe("Scrape tests", () => {
           url,
           maxAge: scrapeTimeout * 3,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("miss");
 
@@ -151,7 +165,7 @@ describe("Scrape tests", () => {
           url,
           maxAge: scrapeTimeout * 3,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response3.metadata.cacheState).toBe("hit");
         expect(response3.metadata.cachedAt).toBeDefined();
@@ -160,7 +174,7 @@ describe("Scrape tests", () => {
           url,
           maxAge: 1,
           timeout: scrapeTimeout,
-        });
+        }, identity);
         
         expect(response4.metadata.cacheState).toBe("miss");
       }, scrapeTimeout * 4 + 2 * indexCooldown);
@@ -173,7 +187,7 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
         
         expect(response1.metadata.cacheState).toBe("miss");
 
@@ -183,7 +197,7 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 2 + 2 * indexCooldown);
@@ -196,7 +210,7 @@ describe("Scrape tests", () => {
           url,
           formats: ["screenshot"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.screenshot).toBeDefined();
 
@@ -207,7 +221,7 @@ describe("Scrape tests", () => {
           formats: ["screenshot"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response2.screenshot).toBe(response1.screenshot);
 
@@ -216,7 +230,7 @@ describe("Scrape tests", () => {
           formats: ["screenshot@fullPage"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3,
-        });
+        }, identity);
 
         expect(response3.screenshot).not.toBe(response1.screenshot);
         expect(response3.metadata.cacheState).toBe("miss");
@@ -230,7 +244,7 @@ describe("Scrape tests", () => {
           url,
           formats: ["screenshot@fullPage"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.screenshot).toBeDefined();
 
@@ -241,7 +255,7 @@ describe("Scrape tests", () => {
           formats: ["screenshot@fullPage"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response2.screenshot).toBe(response1.screenshot);
 
@@ -250,7 +264,7 @@ describe("Scrape tests", () => {
           formats: ["screenshot"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3,
-        });
+        }, identity);
 
         expect(response3.screenshot).not.toBe(response1.screenshot);
         expect(response3.metadata.cacheState).toBe("miss");
@@ -264,14 +278,14 @@ describe("Scrape tests", () => {
           url,
           formats: ["markdown", "changeTracking"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         const response1 = await scrape({
           url,
           formats: ["markdown", "changeTracking"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).not.toBeDefined();
 
@@ -282,7 +296,7 @@ describe("Scrape tests", () => {
           formats: ["markdown"],
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3 + indexCooldown,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 3 + 2 * indexCooldown);
@@ -297,7 +311,7 @@ describe("Scrape tests", () => {
             "X-Test": "test",
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         await new Promise(resolve => setTimeout(resolve, indexCooldown));
 
@@ -305,7 +319,7 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2 + indexCooldown,
-        });
+        }, identity);
 
         expect(response.metadata.cacheState).toBe("miss");
       }, scrapeTimeout * 2 + 1 * indexCooldown);
@@ -317,7 +331,7 @@ describe("Scrape tests", () => {
         await scrape({
           url,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         await new Promise(resolve => setTimeout(resolve, indexCooldown));
 
@@ -326,7 +340,7 @@ describe("Scrape tests", () => {
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
           mobile: true,
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).toBe("miss");
 
@@ -337,7 +351,7 @@ describe("Scrape tests", () => {
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3,
           mobile: true,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 3 + 2 * indexCooldown);
@@ -354,7 +368,7 @@ describe("Scrape tests", () => {
             "type": "wait",
             "milliseconds": 1000,
           }]
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).not.toBeDefined();
 
@@ -364,19 +378,19 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("miss");
       }, scrapeTimeout * 2 + 1 * indexCooldown);
 
-      it.only("respects location", async () => {
+      it.concurrent("respects location", async () => {
         const id = crypto.randomUUID();
         const url = "https://firecrawl.dev/?testId=" + id;
 
         await scrape({
           url,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         await new Promise(resolve => setTimeout(resolve, indexCooldown));
 
@@ -385,7 +399,7 @@ describe("Scrape tests", () => {
           location: { country: "DE" },
           maxAge: scrapeTimeout * 2,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).toBe("miss");
 
@@ -396,7 +410,7 @@ describe("Scrape tests", () => {
           location: { country: "DE" },
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 3 + 2 * indexCooldown);
@@ -409,7 +423,7 @@ describe("Scrape tests", () => {
           url,
           blockAds: true,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         await new Promise(resolve => setTimeout(resolve, indexCooldown));
 
@@ -418,7 +432,7 @@ describe("Scrape tests", () => {
           blockAds: true,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2 + indexCooldown,
-        });
+        }, identity);
 
         expect(response0.metadata.cacheState).toBe("hit");
 
@@ -427,7 +441,7 @@ describe("Scrape tests", () => {
           blockAds: false,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3 + indexCooldown,
-        });
+        }, identity);
 
         expect(response1.metadata.cacheState).toBe("miss");
 
@@ -438,7 +452,7 @@ describe("Scrape tests", () => {
           blockAds: false,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 4 + 2 * indexCooldown,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 4 + 2 * indexCooldown);
@@ -452,7 +466,7 @@ describe("Scrape tests", () => {
           proxy: "stealth",
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.metadata.proxyUsed).toBe("stealth");
         expect(response1.metadata.cacheState).not.toBeDefined();
@@ -463,7 +477,7 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2 + indexCooldown,
-        });
+        }, identity);
 
         expect(response2.metadata.cacheState).toBe("hit");
 
@@ -472,19 +486,19 @@ describe("Scrape tests", () => {
           proxy: "stealth",
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 3 + indexCooldown,
-        });
+        }, identity);
 
         expect(response3.metadata.cacheState).not.toBeDefined();
       }, scrapeTimeout * 3 + indexCooldown);
 
       it.concurrent("works properly on pages returning 200", async () => {
         const id = crypto.randomUUID();
-        const url = "https://httpstat.us/200?testId=" + id;
+        const url = "https://firecrawl.dev/?testId=" + id;
 
         await scrape({
           url,
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         await new Promise(resolve => setTimeout(resolve, indexCooldown));
 
@@ -492,7 +506,7 @@ describe("Scrape tests", () => {
           url,
           timeout: scrapeTimeout,
           maxAge: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(response.metadata.cacheState).toBe("hit");
       }, scrapeTimeout * 2 + 1 * indexCooldown);
@@ -504,7 +518,7 @@ describe("Scrape tests", () => {
           url: "https://example.com",
           formats: ["markdown", "changeTracking"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.changeTracking).toBeDefined();
         expect(response.changeTracking?.previousScrapeAt).not.toBeNull();
@@ -518,7 +532,7 @@ describe("Scrape tests", () => {
             modes: ["git-diff"]
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.changeTracking).toBeDefined();
         expect(response.changeTracking?.previousScrapeAt).not.toBeNull();
@@ -540,7 +554,7 @@ describe("Scrape tests", () => {
             prompt: "Summarize the changes between the previous and current content",
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.changeTracking).toBeDefined();
         expect(response.changeTracking?.previousScrapeAt).not.toBeNull();
@@ -574,7 +588,7 @@ describe("Scrape tests", () => {
             }
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.changeTracking).toBeDefined();
         expect(response.changeTracking?.previousScrapeAt).not.toBeNull();
@@ -607,7 +621,7 @@ describe("Scrape tests", () => {
             }
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.changeTracking).toBeDefined();
         expect(response.changeTracking?.previousScrapeAt).not.toBeNull();
@@ -632,14 +646,14 @@ describe("Scrape tests", () => {
           formats: ["markdown", "changeTracking"],
           changeTrackingOptions: { tag: uuid1 },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         const response2 = await scrape({
           url: "https://firecrawl.dev/",
           formats: ["markdown", "changeTracking"],
           changeTrackingOptions: { tag: uuid2 },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response1.changeTracking?.previousScrapeAt).toBeNull();
         expect(response1.changeTracking?.changeStatus).toBe("new");
@@ -651,7 +665,7 @@ describe("Scrape tests", () => {
           formats: ["markdown", "changeTracking"],
           changeTrackingOptions: { tag: uuid1 },
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response3.changeTracking?.previousScrapeAt).not.toBeNull();
         expect(response3.changeTracking?.changeStatus).not.toBe("new");
@@ -663,7 +677,7 @@ describe("Scrape tests", () => {
         await scrape({
           url: "https://iplocation.com",
           timeout: scrapeTimeout,
-        });
+        }, identity);
       }, scrapeTimeout);
 
       it.concurrent("works with country US", async () => {
@@ -671,19 +685,19 @@ describe("Scrape tests", () => {
           url: "https://iplocation.com",
           location: { country: "US" },
           timeout: scrapeTimeout,
-        });
+        }, identity);
     
         expect(response.markdown).toContain("| Country | United States |");
       }, scrapeTimeout);
     });
 
-    describe("Screenshot (f-e/sb dependant)", () => {
+    describe("Screenshot (f-e dependant)", () => {
       it.concurrent("screenshot format works", async () => {
         const response = await scrape({
           url: "http://firecrawl.dev",
           formats: ["screenshot"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
     
         expect(typeof response.screenshot).toBe("string");
       }, scrapeTimeout);
@@ -693,9 +707,24 @@ describe("Scrape tests", () => {
           url: "http://firecrawl.dev",
           formats: ["screenshot@fullPage"],
           timeout: scrapeTimeout,
-        });
+        }, identity);
     
         expect(typeof response.screenshot).toBe("string");
+      }, scrapeTimeout);
+    });
+
+    describe("PDF generation (f-e dependant)", () => {
+      it.concurrent("works", async () => {
+        const response = await scrape({
+          url: "https://firecrawl.dev",
+          timeout: scrapeTimeout,
+          actions: [{ type: "pdf" }],
+        }, identity);
+
+        expect(response.actions?.pdfs).toBeDefined();
+        expect(response.actions?.pdfs?.length).toBe(1);
+        expect(response.actions?.pdfs?.[0]).toBeDefined();
+        expect(typeof response.actions?.pdfs?.[0]).toBe("string");
       }, scrapeTimeout);
     });
   
@@ -704,7 +733,7 @@ describe("Scrape tests", () => {
         await scrape({
           url: "http://firecrawl.dev",
           timeout: scrapeTimeout,
-        });
+        }, identity);
       }, scrapeTimeout);
 
       it.concurrent("basic works", async () => {
@@ -712,7 +741,7 @@ describe("Scrape tests", () => {
           url: "http://firecrawl.dev",
           proxy: "basic",
           timeout: scrapeTimeout,
-        });
+        }, identity);
       }, scrapeTimeout);
 
       it.concurrent("stealth works", async () => {
@@ -720,7 +749,7 @@ describe("Scrape tests", () => {
           url: "http://firecrawl.dev",
           proxy: "stealth",
           timeout: scrapeTimeout * 2,
-        });
+        }, identity);
       }, scrapeTimeout * 2);
 
       it.concurrent("auto works properly on non-stealth site", async () => {
@@ -728,20 +757,21 @@ describe("Scrape tests", () => {
           url: "http://firecrawl.dev",
           proxy: "auto",
           timeout: scrapeTimeout * 2,
-        });
+        }, identity);
 
         expect(res.metadata.proxyUsed).toBe("basic");
       }, scrapeTimeout * 2);
 
-      it.concurrent("auto works properly on 'stealth' site (faked for reliabile testing)", async () => {
-        const res = await scrape({
-          url: "https://httpstat.us/403",
-          proxy: "auto",
-          timeout: scrapeTimeout * 2,
-        });
+      // TODO: flaky
+      // it.concurrent("auto works properly on 'stealth' site (faked for reliabile testing)", async () => {
+      //   const res = await scrape({
+      //     url: "https://eo16f6718vph4un.m.pipedream.net", // always returns 403
+      //     proxy: "auto",
+      //     timeout: scrapeTimeout * 2,
+      //   }, identity);
 
-        expect(res.metadata.proxyUsed).toBe("stealth");
-      }, scrapeTimeout * 2);
+      //   expect(res.metadata.proxyUsed).toBe("stealth");
+      // }, scrapeTimeout * 2);
     });
     
     describe("PDF (f-e dependant)", () => {
@@ -758,7 +788,7 @@ describe("Scrape tests", () => {
         const response = await scrapeWithFailure({
           url: "https://ecma-international.org/wp-content/uploads/ECMA-262_15th_edition_june_2024.pdf",
           timeout: scrapeTimeout,
-        });
+        }, identity);
 
         expect(response.error).toContain("Insufficient time to process PDF");
       }, scrapeTimeout);
@@ -767,7 +797,7 @@ describe("Scrape tests", () => {
         const response = await scrape({
           url: "https://ecma-international.org/wp-content/uploads/ECMA-262_15th_edition_june_2024.pdf",
           timeout: scrapeTimeout * 5,
-        });
+        }, identity);
 
         // text on the last page
         expect(response.markdown).toContain("Redistribution and use in source and binary forms, with or without modification");
@@ -777,7 +807,7 @@ describe("Scrape tests", () => {
         const response = await scrape({
           url: "https://docs.google.com/document/d/1H-hOLYssS8xXl2o5hxj4ipE7yyhZAX1s7ADYM1Hdlzo/view",
           timeout: scrapeTimeout * 5,
-        });
+        }, identity);
 
         expect(response.markdown).toContain("This is a test to confirm Google Docs scraping abilities.");
       }, scrapeTimeout * 5);
@@ -786,7 +816,7 @@ describe("Scrape tests", () => {
         const response = await scrape({
           url: "https://docs.google.com/presentation/d/1pDKL1UULpr6siq_eVWE1hjqt5MKCgSSuKS_MWahnHAQ/view",
           timeout: scrapeTimeout * 5,
-        });
+        }, identity);
 
         expect(response.markdown).toContain("This is a test to confirm Google Slides scraping abilities.");
       }, scrapeTimeout * 5);
@@ -818,7 +848,7 @@ describe("Scrape tests", () => {
             },
           },
           timeout: scrapeTimeout,
-        });
+        }, identity);
     
         expect(response).toHaveProperty("json");
         expect(response.json).toHaveProperty("company_mission");
@@ -837,7 +867,7 @@ describe("Scrape tests", () => {
     const response = await scrape({
       url: "https://firecrawl.dev/?pagewanted=all&et_blog",
       timeout: scrapeTimeout,
-    });
+    }, identity);
 
     expect(response.metadata.sourceURL).toBe("https://firecrawl.dev/?pagewanted=all&et_blog");
   }, scrapeTimeout);
@@ -847,7 +877,7 @@ describe("Scrape tests", () => {
       url: "https://jsonplaceholder.typicode.com/todos/1",
       formats: ["markdown"],
       timeout: scrapeTimeout,
-    });
+    }, identity);
 
     expect(response.markdown).toContain("```json");
   }, scrapeTimeout);

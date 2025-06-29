@@ -4,10 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - apps/api/**
-  # schedule:
-  #   - cron: '0 */4 * * *'
 
 env:
   BULL_AUTH_KEY: ${{ secrets.BULL_AUTH_KEY }}
@@ -42,6 +38,7 @@ env:
   VERTEX_CREDENTIALS: ${{ secrets.VERTEX_CREDENTIALS }}
   USE_GO_MARKDOWN_PARSER: true
   SENTRY_ENVIRONMENT: dev
+  IDMUX_URL: ${{ secrets.IDMUX_URL }}
 
 jobs:
   test:
