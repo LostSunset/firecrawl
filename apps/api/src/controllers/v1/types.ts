@@ -9,6 +9,7 @@ import {
   Document as V0Document,
 } from "../../lib/entities";
 import { InternalOptions } from "../../scraper/scrapeURL";
+import { getURLDepth } from "../../scraper/WebScraper/utils/maxDepthUtils";
 
 export enum IntegrationEnum {
   DIFY = "dify",
@@ -61,7 +62,7 @@ export const url = z.preprocess(
     .regex(/^https?:\/\//, "URL uses unsupported protocol")
     .refine(
       (x) =>
-        /\.[a-zA-Z0-9-\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{2,}(:\d+)?([\/?#]|$)/i.test(
+        /(\.[a-zA-Z0-9-\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{2,}|\.xn--[a-zA-Z0-9-]{1,})(:\d+)?([\/?#]|$)/i.test(
           x,
         ),
       "URL must have a valid top-level domain or be a valid path",
@@ -342,6 +343,7 @@ const baseScrapeOptions = z
     // @deprecated
     __experimental_cache: z.boolean().default(false).optional(),
     __searchPreviewToken: z.string().optional(),
+    __experimental_omce: z.boolean().default(false).optional(),
   })
   .strict(strictMessage);
 
@@ -353,6 +355,19 @@ const fire1Refine = (obj) => {
 }
 const fire1RefineOpts = {
   message: "You may only specify the FIRE-1 model in agent or jsonOptions.agent, but not both.",
+};
+const waitForRefine = (obj) => {
+  if (obj.waitFor && obj.timeout) {
+    if (typeof obj.timeout !== 'number' || obj.timeout <= 0) {
+      return false;
+    }
+    return obj.waitFor <= obj.timeout / 2;
+  }
+  return true;
+};
+const waitForRefineOpts = {
+  message: "waitFor must not exceed half of timeout",
+  path: ["waitFor"],
 };
 const extractRefine = (obj) => {
   const hasExtractFormat = obj.formats?.includes("extract");
@@ -446,6 +461,7 @@ export const scrapeOptions = baseScrapeOptions
   )
   .refine(extractRefine, extractRefineOpts)
   .refine(fire1Refine, fire1RefineOpts)
+  .refine(waitForRefine, waitForRefineOpts)
   .transform(extractTransform);
 
 export type BaseScrapeOptions = z.infer<typeof baseScrapeOptions>;
@@ -530,6 +546,10 @@ export const extractV1Options = z
     (x) => (x.scrapeOptions ? fire1Refine(x.scrapeOptions) : true),
     fire1RefineOpts,
   )
+  .refine(
+    (x) => (x.scrapeOptions ? waitForRefine(x.scrapeOptions) : true),
+    waitForRefineOpts,
+  )
   .transform((x) => ({
     ...x,
     scrapeOptions: x.scrapeOptions
@@ -559,10 +579,12 @@ export const scrapeRequestSchema = baseScrapeOptions
     origin: z.string().optional().default("api"),
     integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     timeout: z.number().int().positive().finite().safe().default(30000),
+    zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
   .refine(extractRefine, extractRefineOpts)
   .refine(fire1Refine, fire1RefineOpts)
+  .refine(waitForRefine, waitForRefineOpts)
   .transform(extractTransform);
 
 export type ScrapeRequest = z.infer<typeof scrapeRequestSchema>;
@@ -597,10 +619,12 @@ export const batchScrapeRequestSchema = baseScrapeOptions
     appendToId: z.string().uuid().optional(),
     ignoreInvalidURLs: z.boolean().default(false),
     maxConcurrency: z.number().positive().int().optional(),
+    zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
   .refine(extractRefine, extractRefineOpts)
   .refine(fire1Refine, fire1RefineOpts)
+  .refine(waitForRefine, waitForRefineOpts)
   .transform(extractTransform);
 
 export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
@@ -612,10 +636,12 @@ export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
     appendToId: z.string().uuid().optional(),
     ignoreInvalidURLs: z.boolean().default(false),
     maxConcurrency: z.number().positive().int().optional(),
+    zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
   .refine(extractRefine, extractRefineOpts)
   .refine(fire1Refine, fire1RefineOpts)
+  .refine(waitForRefine, waitForRefineOpts)
   .transform(extractTransform);
 
 export type BatchScrapeRequest = z.infer<typeof batchScrapeRequestSchema>;
@@ -663,10 +689,22 @@ export const crawlRequestSchema = crawlerOptions
     webhook: webhookSchema.optional(),
     limit: z.number().default(10000),
     maxConcurrency: z.number().positive().int().optional(),
+    zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
   .refine((x) => extractRefine(x.scrapeOptions), extractRefineOpts)
   .refine((x) => fire1Refine(x.scrapeOptions), fire1RefineOpts)
+  .refine((x) => waitForRefine(x.scrapeOptions), waitForRefineOpts)
+  .refine(
+    (data) => {
+      const urlDepth = getURLDepth(data.url);
+      return urlDepth <= data.maxDepth;
+    },
+    {
+      message: "URL depth exceeds the specified maxDepth",
+      path: ["url"]
+    }
+  )
   .transform((x) => {
     if (x.crawlEntireDomain !== undefined) {
       x.allowBackwardLinks = x.crawlEntireDomain;
@@ -938,6 +976,7 @@ export type OngoingCrawlsResponse =
       id: string;
       teamId: string;
       url: string;
+      created_at: string;
       options: CrawlerOptions;
     }[];
   };
@@ -1002,6 +1041,9 @@ export type AuthCreditUsageChunk = {
 export type TeamFlags = {
   ignoreRobots?: boolean;
   unblockedDomains?: string[];
+  forceZDR?: boolean;
+  allowZDR?: boolean;
+  zdrCost?: number;
 } | null;
 
 export type AuthCreditUsageChunkFromTeam = Omit<AuthCreditUsageChunk, "api_key">;
@@ -1269,6 +1311,7 @@ export const searchRequestSchema = z
               "screenshot",
               "screenshot@fullPage",
               "extract",
+              "json",
             ]),
           )
           .default([]),
@@ -1280,6 +1323,7 @@ export const searchRequestSchema = z
   )
   .refine((x) => extractRefine(x.scrapeOptions), extractRefineOpts)
   .refine((x) => fire1Refine(x.scrapeOptions), fire1RefineOpts)
+  .refine((x) => waitForRefine(x.scrapeOptions), waitForRefineOpts)
   .transform((x) => ({
     ...x,
     scrapeOptions: extractTransform(x.scrapeOptions),

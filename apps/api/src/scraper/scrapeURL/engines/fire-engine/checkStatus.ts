@@ -9,10 +9,11 @@ import {
   SiteError,
   SSLError,
   UnsupportedFileError,
-  DNSResolutionError
+  DNSResolutionError,
+  FEPageLoadFailed
 } from "../../error";
 import { MockState } from "../../lib/mock";
-import { fireEngineURL } from "./scrape";
+import { fireEngineStagingURL, fireEngineURL } from "./scrape";
 import { getDocFromGCS } from "../../../../lib/gcs-jobs";
 import { Meta } from "../..";
 
@@ -94,6 +95,8 @@ const successSchema = z.object({
     .or(z.null()),
 
   docUrl: z.string().optional(),
+
+  usedMobileProxy: z.boolean().optional(),
 });
 
 export type FireEngineCheckStatusSuccess = z.infer<typeof successSchema>;
@@ -130,6 +133,7 @@ export async function fireEngineCheckStatus(
   jobId: string,
   mock: MockState | null,
   abort?: AbortSignal,
+  production = true,
 ): Promise<FireEngineCheckStatusSuccess> {
   let status = await Sentry.startSpan(
     {
@@ -140,7 +144,7 @@ export async function fireEngineCheckStatus(
     },
     async (span) => {
       return await robustFetch({
-        url: `${fireEngineURL}/scrape/${jobId}`,
+        url: `${production ? fireEngineURL : fireEngineStagingURL}/scrape/${jobId}`,
         method: "GET",
         logger: logger.child({ method: "fireEngineCheckStatus/robustFetch" }),
         headers: {
@@ -200,6 +204,12 @@ export async function fireEngineCheckStatus(
       throw new UnsupportedFileError(
         "File size exceeds " + status.error.split("File size exceeds ")[1],
       );
+    } else if (
+      typeof status.error === "string" &&
+      status.error.includes("failed to finish without timing out")
+    ) {
+      logger.warn("CDP timed out while loading the page", { status, jobId });
+      throw new FEPageLoadFailed();
     } else if (
       typeof status.error === "string" &&
       // TODO: improve this later

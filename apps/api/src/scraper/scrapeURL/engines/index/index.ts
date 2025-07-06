@@ -7,6 +7,7 @@ import crypto from "crypto";
 
 export async function sendDocumentToIndex(meta: Meta, document: Document) {
     const shouldCache = meta.options.storeInCache
+        && !meta.internalOptions.zeroDataRetention
         && meta.winnerEngine !== "index"
         && meta.winnerEngine !== "index;documents"
         && (
@@ -198,6 +199,8 @@ export async function scrapeURLWithIndex(meta: Meta): Promise<EngineScrapeResult
 
         cacheInfo: {
             created_at: new Date(data[0].created_at),
-        }
+        },
+
+        proxyUsed: doc.proxyUsed ?? "basic",
     };
 }
